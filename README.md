@@ -4,6 +4,18 @@ MVP: קליטת דוח Activity Statement של Interactive Brokers (IBKR), חי�
 
 ראו את מסמך התכנון המלא: `C:\Users\User\.claude\plans\fuzzy-bubbling-catmull.md`
 
+## פריסה (Deployment)
+
+**Frontend**: פרוס ב-Netlify בכתובת http://niaot-reports.netlify.app (מוגן כרגע בסיסמת כניסה ברמת ה-JavaScript של האפליקציה — ראו `frontend/src/components/PasswordGate.tsx`. **זו לא הגנה אמיתית**: הקוד והסיסמה גלויים לחלוטין בצד הלקוח, וזה רק placeholder עד לשדרוג Netlify לתוכנית Pro (המאפשרת הגנת סיסמה אמיתית ברמת ה-CDN) ו/או הוספת אימות אמיתי בצד ה-backend.
+
+**Backend**: Netlify Functions תומכות רק ב-Node.js, ולכן ה-backend (Python/FastAPI) **לא יכול להיות מאוחסן ב-Netlify** ועדיין דורש אחסון נפרד (Render/Railway/וכו') לפני שהאתר החי יהיה שימושי בפועל מקצה לקצה. עד אז, `VITE_API_BASE` (ראו `frontend/.env.example`) לא הוגדר בסביבת ה-Netlify, כך שהאתר החי ינסה לפנות ל-`http://localhost:8000` וייכשל בכל קריאת API.
+
+לפריסת עדכון לאתר הקיים:
+```bash
+git add -A && git commit -m "..."
+```
+ואז שימוש בכלי ה-MCP של Netlify (`deploy-site` עם ה-siteId `6d2d642a-907d-4b7b-9825-c4aec51dafaf`), או `netlify deploy --prod` מקומית אם מותקן ה-CLI.
+
 ## מה המערכת עושה (ומה לא)
 
 - מחלצת נתונים מדוח IBKR PDF ומסווגת אותם אוטומטית לפי חוקים ברורים בלבד (למשל: דיבידנד רגיל → שדה 462).
