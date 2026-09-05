@@ -1,4 +1,5 @@
 import { Link, Route, BrowserRouter, Routes } from "react-router-dom";
+import PasswordGate from "./components/PasswordGate";
 import AppendixPreview from "./pages/AppendixPreview";
 import ClientStatements from "./pages/ClientStatements";
 import ClientsIndex from "./pages/ClientsIndex";
@@ -6,6 +7,14 @@ import ReviewTransactions from "./pages/ReviewTransactions";
 import UploadStatement from "./pages/UploadStatement";
 
 export default function App() {
+  return (
+    <PasswordGate>
+      <AppRoutes />
+    </PasswordGate>
+  );
+}
+
+function AppRoutes() {
   return (
     <BrowserRouter>
       <header className="app-header">
