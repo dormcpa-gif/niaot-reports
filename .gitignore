@@ -1,0 +1,25 @@
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.egg-info/
+backend/data/*.db
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+
+# Netlify CLI local state (not user code)
+.netlify/
+
+# Generated appendix downloads left over from manual testing
+/nespach_ezer_*.xlsx
+
+# Never commit real client statements or extracted client data
+backend/tests/fixtures/*.pdf
+*.pdf
+!backend/tests/fixtures/README.md
