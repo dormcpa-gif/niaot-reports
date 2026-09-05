@@ -1,4 +1,11 @@
+import { getApiKey } from "../components/PasswordGate";
+
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+
+function authHeaders(): Record<string, string> {
+  const key = getApiKey();
+  return key ? { "X-API-Key": key } : {};
+}
 
 export interface Client {
   id: string;
@@ -64,7 +71,10 @@ export interface StatementDetail {
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, init);
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: { ...authHeaders(), ...(init?.headers ?? {}) },
+  });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status} ${res.statusText}: ${body}`);
@@ -92,7 +102,7 @@ export const api = {
     form.append("tax_year", String(taxYear));
     form.append("broker", broker);
     form.append("file", file);
-    const res = await fetch(`${API_BASE}/statements`, { method: "POST", body: form });
+    const res = await fetch(`${API_BASE}/statements`, { method: "POST", body: form, headers: authHeaders() });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   },
@@ -119,7 +129,7 @@ export const api = {
   ): Promise<Blob> => {
     const res = await fetch(`${API_BASE}/statements/${id}/appendix.xlsx`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ fx_rates: fxRates }),
     });
     if (!res.ok) throw new Error(await res.text());

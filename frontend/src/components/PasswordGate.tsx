@@ -11,18 +11,25 @@ import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 const SITE_PASSWORD = "311576250";
 const SESSION_KEY = "niaot-reports-unlocked";
 
+/** The same value the user typed here is sent as the API's X-API-Key
+ * header (see api/client.ts) -- one secret unlocks both the UI and the
+ * backend, so there's nothing extra for the user to configure. */
+export function getApiKey(): string | null {
+  try {
+    return sessionStorage.getItem(SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export default function PasswordGate({ children }: { children: ReactNode }) {
   const [unlocked, setUnlocked] = useState(false);
   const [attempt, setAttempt] = useState("");
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    try {
-      if (sessionStorage.getItem(SESSION_KEY) === "1") {
-        setUnlocked(true);
-      }
-    } catch {
-      // sessionStorage unavailable (e.g. private browsing) - fall through to the password screen
+    if (getApiKey() === SITE_PASSWORD) {
+      setUnlocked(true);
     }
   }, []);
 
@@ -32,7 +39,7 @@ export default function PasswordGate({ children }: { children: ReactNode }) {
       setError(false);
       setUnlocked(true);
       try {
-        sessionStorage.setItem(SESSION_KEY, "1");
+        sessionStorage.setItem(SESSION_KEY, attempt);
       } catch {
         // ignore storage failures - unlocked state still holds for this page load
       }

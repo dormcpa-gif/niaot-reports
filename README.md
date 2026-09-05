@@ -8,9 +8,21 @@ MVP: קליטת דוח Activity Statement של Interactive Brokers (IBKR), חי�
 
 **Frontend**: פרוס ב-Netlify בכתובת http://niaot-reports.netlify.app (מוגן כרגע בסיסמת כניסה ברמת ה-JavaScript של האפליקציה — ראו `frontend/src/components/PasswordGate.tsx`. **זו לא הגנה אמיתית**: הקוד והסיסמה גלויים לחלוטין בצד הלקוח, וזה רק placeholder עד לשדרוג Netlify לתוכנית Pro (המאפשרת הגנת סיסמה אמיתית ברמת ה-CDN) ו/או הוספת אימות אמיתי בצד ה-backend.
 
-**Backend**: Netlify Functions תומכות רק ב-Node.js, ולכן ה-backend (Python/FastAPI) **לא יכול להיות מאוחסן ב-Netlify** ועדיין דורש אחסון נפרד (Render/Railway/וכו') לפני שהאתר החי יהיה שימושי בפועל מקצה לקצה. עד אז, `VITE_API_BASE` (ראו `frontend/.env.example`) לא הוגדר בסביבת ה-Netlify, כך שהאתר החי ינסה לפנות ל-`http://localhost:8000` וייכשל בכל קריאת API.
+**Backend**: Netlify Functions תומכות רק ב-Node.js, ולכן ה-backend (Python/FastAPI) **לא יכול להיות מאוחסן ב-Netlify** ועדיין דורש אחסון נפרד לפני שהאתר החי יהיה שימושי בפועל מקצה לקצה.
 
-לפריסת עדכון לאתר הקיים:
+**אבטחת ה-API**: מסך הסיסמה ב-frontend הוא צד-לקוח בלבד ולא מגן על ה-API עצמו. כל נתיבי ה-API (מלבד `/health`) דורשים כותרת `X-API-Key` (ראו `backend/app/api/auth.py`) - אותו ערך כמו סיסמת הכניסה, כדי שלא יהיה צורך בהגדרה נוספת. זה עדיין לא אימות "אמיתי" רב-משתמשים, רק רף מינימלי לפני שה-backend נגיש מהאינטרנט הפתוח.
+
+### חיבור Render (backend)
+
+יש `render.yaml` בשורש הריפו. כדי לחבר:
+1. ליצור חשבון Render חינמי (render.com) - **פעולה שהמשתמש צריך לבצע בעצמו**.
+2. לחבר את הריפו הזה (GitHub) לפרויקט Render חדש - Render יזהה את `render.yaml` אוטומטית.
+3. להגדיר את משתנה הסביבה `API_SHARED_KEY` לאותו ערך כמו סיסמת הכניסה (`311576250`).
+4. לקחת את כתובת ה-URL שRender נותן (למשל `https://niaot-reports-backend.onrender.com`) ולהגדיר אותה כמשתנה `VITE_API_BASE` בהגדרות הסביבה של אתר ה-Netlify, ואז לפרוס מחדש את ה-frontend.
+
+**הערה חשובה**: בתוכנית החינמית של Render מערכת הקבצים **זמנית** - מסד הנתונים SQLite (`backend/data/app.db`) נמחק בכל פריסה מחדש ובכל הפעלה מחדש (לאחר כ-15 דקות חוסר פעילות בתוכנית החינמית). זה בסדר לבדיקות, אך לפני שימוש עם נתוני לקוחות אמיתיים יש לשדרג לתוכנית בתשלום עם דיסק קבוע, או לעבור למסד נתונים מנוהל (Postgres) במקום SQLite.
+
+לפריסת עדכון לאתר ה-frontend הקיים ב-Netlify:
 ```bash
 git add -A && git commit -m "..."
 ```
