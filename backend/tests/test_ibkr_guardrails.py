@@ -33,9 +33,16 @@ def test_rejects_a_document_that_is_not_an_ibkr_statement():
         _sanity_check_is_ibkr_statement("Some unrelated PDF content\nNothing to see here")
 
 
-def test_rejects_non_usd_base_currency_instead_of_silently_mislabeling():
-    text = VALID_HEADER.replace("Base Currency USD", "Base Currency EUR")
-    with pytest.raises(ValueError, match="EUR"):
+def test_accepts_gbp_and_eur_base_currency_for_ibkr_uk_and_europe_accounts():
+    gbp_text = VALID_HEADER.replace("Base Currency USD", "Base Currency GBP")
+    assert _parse_base_currency(gbp_text).value == "GBP"
+    eur_text = VALID_HEADER.replace("Base Currency USD", "Base Currency EUR")
+    assert _parse_base_currency(eur_text).value == "EUR"
+
+
+def test_rejects_an_unsupported_base_currency_instead_of_silently_mislabeling():
+    text = VALID_HEADER.replace("Base Currency USD", "Base Currency JPY")
+    with pytest.raises(ValueError, match="JPY"):
         _parse_base_currency(text)
 
 

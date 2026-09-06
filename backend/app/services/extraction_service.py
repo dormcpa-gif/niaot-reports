@@ -15,12 +15,25 @@ from app.mapping.classification import (
 from app.models.transactions import Dividend, NormalizedStatement
 from app.parsers.base import StatementParser
 from app.parsers.etoro_statement import EToroStatementParser
+from app.parsers.form_1040 import Form1040Parser
 from app.parsers.ibkr_activity import IBKRActivityParser
+from app.parsers.k1_schedule import K1ScheduleParser
+from app.parsers.schwab_statement import SchwabStatementParser
+from app.parsers.tradestation_export import TradeStationExportParser
 
+# IBKR also covers IBKR (U.K.) Limited / Central Europe accounts (same
+# statement layout, GBP/EUR base currency) -- see ibkr_activity.py.
+# Every entry below except IBKR itself is unverified against a real
+# statement -- see each parser module's docstring before trusting its
+# output the way the IBKR one has been validated.
 _PARSERS: dict[str, StatementParser] = {
     "IBKR": IBKRActivityParser(),
-    # unverified against a real eToro export -- see the parser module docstring
     "ETORO": EToroStatementParser(),
+    "SCHWAB": SchwabStatementParser(),
+    "TD_AMERITRADE": SchwabStatementParser(),  # TD Ameritrade migrated onto Schwab's platform/statement format
+    "TRADESTATION": TradeStationExportParser(),
+    "K1": K1ScheduleParser(),
+    "FORM_1040": Form1040Parser(),
 }
 
 

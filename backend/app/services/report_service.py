@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from app.mapping.classification import ClassifiedItem
 from app.mapping.nispach_c import NispachCResult, build_nispach_c
 from app.mapping.nispach_d import NispachDResult, build_nispach_d
-from app.models.transactions import Currency, Dividend, NormalizedStatement
+from app.models.transactions import Dividend, NormalizedStatement
 from app.services.currency_service import CurrencyService
 
 
@@ -73,12 +73,14 @@ def build_appendix_report(
     trade_items = [c for c in classified if c.source_kind == "trade"]
 
     nispach_d = build_nispach_d(dividend_and_interest_items, dividends_by_id, currency_service)
-    nispach_c = build_nispach_c(trade_items, statement.sale_proceeds_by_symbol, currency_service, bracket_overrides)
+    nispach_c = build_nispach_c(
+        trade_items, statement.sale_proceeds_by_symbol, currency_service, bracket_overrides, statement.base_currency
+    )
 
     explanation_rows: list[ExplanationRow] = []
     for item in classified:
         table_name, row_text = _source_table_and_text(statement, item.source_kind, item.source_id)
-        conv = currency_service.convert(item.amount_source_ccy, Currency.USD, item.value_date)
+        conv = currency_service.convert(item.amount_source_ccy, item.currency, item.value_date)
         if item.source_kind == "trade":
             target_field = "נספח ג' (רווח הון מני\"ע)"
         elif item.nispach_d_field:

@@ -82,10 +82,10 @@ async def upload_statement(
         result = extract_and_classify(file_bytes, statement_id, broker=broker)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
-    except Exception as e:  # pdfplumber/pdfminer raise various low-level errors on corrupt/non-PDF input
+    except Exception as e:  # pdfplumber/pdfminer/csv raise various low-level errors on corrupt/wrong-format input
         raise HTTPException(
             status_code=422,
-            detail=f"לא ניתן היה לפענח את הקובץ כ-PDF תקין (שגיאה: {e}). ודאו שהקובץ אינו פגום ושהוא אכן PDF.",
+            detail=f"לא ניתן היה לפענח את הקובץ (שגיאה: {e}). ודאו שהקובץ אינו פגום ושהוא בפורמט הנכון לברוקר שנבחר.",
         ) from e
 
     orm = StatementORM(

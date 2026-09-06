@@ -15,7 +15,7 @@ from enum import Enum
 
 from pydantic import BaseModel
 
-from app.models.transactions import Dividend, FeeItem, InterestItem, Trade
+from app.models.transactions import Currency, Dividend, FeeItem, InterestItem, Trade
 
 
 class NispachDBracket(str, Enum):
@@ -56,7 +56,8 @@ class ClassifiedItem(BaseModel):
     source_kind: str  # "dividend" | "interest" | "trade" | "fee"
     source_id: str  # symbol/description, for traceability
     nispach_d_field: str | None  # e.g. "462"; None if it doesn't map to Nispach D
-    amount_source_ccy: float  # native statement currency (USD for IBKR)
+    amount_source_ccy: float  # native statement currency
+    currency: Currency = Currency.USD  # which currency amount_source_ccy/withholding_source_ccy are in
     value_date: date_type  # used to look up the FX rate for ILS conversion
     withholding_source_ccy: float = 0.0
     needs_review: bool = False
@@ -75,6 +76,7 @@ def classify_dividend(d: Dividend) -> ClassifiedItem:
         source_id=f"{d.symbol} {d.pay_date.isoformat()}",
         nispach_d_field=NispachDBracket.DIVIDEND_25.value,
         amount_source_ccy=d.gross_amount,
+        currency=d.currency,
         value_date=d.pay_date,
         withholding_source_ccy=d.withholding_tax,
         needs_review=True,
@@ -93,6 +95,7 @@ def classify_interest(i: InterestItem) -> ClassifiedItem:
         source_id=f"{i.description} {i.value_date.isoformat()}",
         nispach_d_field=None,
         amount_source_ccy=i.amount,
+        currency=i.currency,
         value_date=i.value_date,
         needs_review=True,
         review_reason="ריבית: יש לבחור ידנית את מדרגת המס הנכונה (412/428/417/415) בהתאם לסוג המכשיר.",
@@ -111,6 +114,7 @@ def classify_trade(t: Trade) -> ClassifiedItem:
         source_id=f"{t.symbol} ({t.holding_term.value}-term, {t.close_date.isoformat()})",
         nispach_d_field=None,
         amount_source_ccy=t.realized_pnl,
+        currency=t.currency,
         value_date=t.close_date,
         needs_review=True,
         review_reason='רווח/הפסד הון ממכירת ני"ע: מועבר לנספח ג\'. יש לאמת את מדרגת המס (35/30/25/20/15%).',
@@ -126,6 +130,7 @@ def classify_fee(f: FeeItem) -> ClassifiedItem:
         source_id=f"{f.description} {f.value_date.isoformat()}",
         nispach_d_field=None,
         amount_source_ccy=f.amount,
+        currency=f.currency,
         value_date=f.value_date,
         needs_review=True,
         review_reason="עמלה/דמי ניהול: אינפורמטיבי בלבד, לא ממופה אוטומטית לשדה בטופס.",

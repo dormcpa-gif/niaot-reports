@@ -26,6 +26,16 @@ Design notes (why it's built this way):
   capital-gains tax brackets for securities don't follow the US
   short/long holding-period distinction, so that classification is left
   for the accountant to confirm (see app/mapping/nispach_c.py).
+
+- IBKR (U.K.) Limited / Central Europe accounts use this exact same
+  Activity Statement layout, just with a GBP or EUR base currency
+  instead of USD (confirmed only by inspecting the format of the real
+  US statement we validated against, which references "Interactive
+  Brokers (U.K.) Limited" as a clearing entity on the same template --
+  **not yet run against a real GBP/EUR statement**, so treat non-USD
+  results with the same extra scrutiny as the eToro parser). Any other
+  base currency is still rejected explicitly rather than silently
+  mis-converted, since currency_service needs a matching FX rate table.
 """
 
 from __future__ import annotations
@@ -89,7 +99,16 @@ def _parse_period(full_text: str) -> tuple[date, date]:
     return start, end
 
 
+_SUPPORTED_BASE_CURRENCIES = {"USD", "GBP", "EUR"}
+
+
 def _parse_base_currency(full_text: str) -> Currency:
+    """USD covers IBKR (US); GBP/EUR cover IBKR (U.K.) Limited /
+    Central Europe accounts, which use the identical statement layout
+    (see module docstring in the broker-support README section) -- only
+    the base currency and per-row currency codes differ. Any other
+    currency is rejected explicitly rather than silently mis-converted,
+    since currency_service has no rate table for it by default."""
     m = _BASE_CURRENCY_RE.search(full_text)
     if not m:
         raise ValueError(
@@ -97,17 +116,12 @@ def _parse_base_currency(full_text: str) -> Currency:
             "ודאו שזהו קובץ Activity Statement תקין של Interactive Brokers."
         )
     code = m.group(1)
-    if code not in Currency.__members__:
+    if code not in _SUPPORTED_BASE_CURRENCIES or code not in Currency.__members__:
         raise ValueError(
-            f"מטבע הבסיס של החשבון הוא {code}, שאינו נתמך עדיין (רק USD נתמך ב-MVP הנוכחי). "
-            "עיבוד חשבון שאינו דולרי דורש הרחבה של לוגיקת ההמרה - נא לפנות להרחבת המערכת לפני שימוש."
+            f"מטבע הבסיס של החשבון הוא {code}, שאינו נתמך עדיין (USD/GBP/EUR בלבד נתמכים כרגע). "
+            "עיבוד חשבון במטבע אחר דורש הרחבה של לוגיקת ההמרה - נא לפנות להרחבת המערכת לפני שימוש."
         )
-    if code != "USD":
-        raise ValueError(
-            f"מטבע הבסיס של החשבון הוא {code}. גרסת ה-MVP הנוכחית תומכת רק בחשבונות דולריים (USD), "
-            "כדי למנוע חישוב שגוי בשקט. נא לפנות להרחבת המערכת לתמיכה במטבע זה."
-        )
-    return Currency.USD
+    return Currency(code)
 
 
 def _sanity_check_is_ibkr_statement(full_text: str) -> None:
@@ -118,7 +132,9 @@ def _sanity_check_is_ibkr_statement(full_text: str) -> None:
         )
 
 
-def parse_dividends_text(text: str, statement_id: str, page: int) -> list[Dividend]:
+def parse_dividends_text(
+    text: str, statement_id: str, page: int, default_currency: Currency = Currency.USD
+) -> list[Dividend]:
     flat = _flatten(text)
     out: list[Dividend] = []
     for m in _DIVIDEND_RE.finditer(flat):
@@ -133,7 +149,7 @@ def parse_dividends_text(text: str, statement_id: str, page: int) -> list[Divide
                 isin=m.group("isin"),
                 description=m.group("divtype"),
                 gross_amount=float(amount_str.replace(",", "")),
-                currency=Currency(m.group("ccy")) if m.group("ccy") in Currency.__members__ else Currency.USD,
+                currency=Currency(m.group("ccy")) if m.group("ccy") in Currency.__members__ else default_currency,
                 source=SourceRef(
                     statement_id=statement_id,
                     page=page,
@@ -162,7 +178,9 @@ def _extract_block(text: str, start_header: str, end_marker: str = "Total") -> s
     return "\n".join(block_lines)
 
 
-def parse_interest_text(text: str, statement_id: str, page: int) -> list[InterestItem]:
+def parse_interest_text(
+    text: str, statement_id: str, page: int, currency: Currency = Currency.USD
+) -> list[InterestItem]:
     block = _extract_block(text, "Interest")
     if not block:
         return []
@@ -176,13 +194,14 @@ def parse_interest_text(text: str, statement_id: str, page: int) -> list[Interes
                 value_date=datetime.strptime(m.group("date"), "%Y-%m-%d").date(),
                 description=m.group("desc").strip(),
                 amount=float(m.group("amount").replace(",", "")),
+                currency=currency,
                 source=SourceRef(statement_id=statement_id, page=page, table_name="Interest", row_text=line.strip()),
             )
         )
     return out
 
 
-def parse_fees_text(text: str, statement_id: str, page: int) -> list[FeeItem]:
+def parse_fees_text(text: str, statement_id: str, page: int, currency: Currency = Currency.USD) -> list[FeeItem]:
     block = _extract_block(text, "Advisor Fees")
     if not block:
         return []
@@ -196,13 +215,16 @@ def parse_fees_text(text: str, statement_id: str, page: int) -> list[FeeItem]:
                 description=m.group("desc").strip(),
                 value_date=datetime.strptime(m.group("date"), "%Y-%m-%d").date(),
                 amount=float(m.group("amount").replace(",", "")),
+                currency=currency,
                 source=SourceRef(statement_id=statement_id, page=page, table_name="Advisor Fees", row_text=line.strip()),
             )
         )
     return out
 
 
-def parse_realized_pnl_text(text: str, statement_id: str, page: int, period_end: date) -> list[Trade]:
+def parse_realized_pnl_text(
+    text: str, statement_id: str, page: int, period_end: date, currency: Currency = Currency.USD
+) -> list[Trade]:
     """Parse rows of the 'Realized & Unrealized Performance Summary' table.
 
     Row shape (12 numeric columns after the symbol):
@@ -243,6 +265,7 @@ def parse_realized_pnl_text(text: str, statement_id: str, page: int, period_end:
                     cost_basis=0.0,
                     realized_pnl=round(st_realized, 2),
                     holding_term=HoldingTerm.SHORT,
+                    currency=currency,
                     source=source,
                 )
             )
@@ -255,6 +278,7 @@ def parse_realized_pnl_text(text: str, statement_id: str, page: int, period_end:
                     cost_basis=0.0,
                     realized_pnl=round(lt_realized, 2),
                     holding_term=HoldingTerm.LONG,
+                    currency=currency,
                     source=source,
                 )
             )
@@ -310,7 +334,7 @@ class IBKRActivityParser:
                 text = page.extract_text() or ""
 
                 if "Realized & Unrealized Performance Summary" in text:
-                    trades.extend(parse_realized_pnl_text(text, statement_id, page_num, period_end))
+                    trades.extend(parse_realized_pnl_text(text, statement_id, page_num, period_end, base_currency))
 
                 if re.search(r"^Trades$", text, re.MULTILINE):
                     for symbol, proceeds in parse_trade_totals_text(text).items():
@@ -321,11 +345,11 @@ class IBKRActivityParser:
                         width = page.width
                         left_text = page.crop((0, 0, width / 2, page.height)).extract_text() or ""
                         right_text = page.crop((width / 2, 0, width, page.height)).extract_text() or ""
-                        dividends.extend(parse_dividends_text(left_text, statement_id, page_num))
-                        interest.extend(parse_interest_text(right_text, statement_id, page_num))
-                        fees.extend(parse_fees_text(right_text, statement_id, page_num))
+                        dividends.extend(parse_dividends_text(left_text, statement_id, page_num, base_currency))
+                        interest.extend(parse_interest_text(right_text, statement_id, page_num, base_currency))
+                        fees.extend(parse_fees_text(right_text, statement_id, page_num, base_currency))
                     else:
-                        dividends.extend(parse_dividends_text(text, statement_id, page_num))
+                        dividends.extend(parse_dividends_text(text, statement_id, page_num, base_currency))
 
         return NormalizedStatement(
             statement_id=statement_id,

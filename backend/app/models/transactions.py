@@ -13,6 +13,7 @@ class Currency(str, Enum):
     USD = "USD"
     ILS = "ILS"
     EUR = "EUR"
+    GBP = "GBP"
 
 
 class TransactionKind(str, Enum):

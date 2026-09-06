@@ -43,12 +43,19 @@ class NispachCResult(BaseModel):
 
 def build_nispach_c(
     classified_trades: list[ClassifiedItem],
-    sale_proceeds_by_symbol_usd: dict[str, float],
+    sale_proceeds_by_symbol_native: dict[str, float],
     currency_service: CurrencyService,
     bracket_overrides: dict[str, str] | None = None,
+    base_currency: Currency = Currency.USD,
 ) -> NispachCResult:
     """bracket_overrides: {source_id: "30"} to move a specific trade out
-    of the 25% default bracket, as confirmed by the accountant."""
+    of the 25% default bracket, as confirmed by the accountant.
+
+    sale_proceeds_by_symbol_native / base_currency: the per-symbol totals
+    come from the statement's own base currency (USD for a US IBKR
+    account, GBP/EUR for an IBKR UK/Europe account) -- pass the
+    statement's base_currency so the FX conversion below uses the right
+    rate table lookup instead of assuming USD."""
     overrides = bracket_overrides or {}
     totals: dict[str, NispachCBracketTotal] = {
         b: NispachCBracketTotal(tax_rate_percent=b, gross_gain_ils=0.0, item_count=0) for b in BRACKETS
@@ -56,13 +63,13 @@ def build_nispach_c(
 
     for item in classified_trades:
         bracket = overrides.get(item.source_id, DEFAULT_BRACKET)
-        conv = currency_service.convert(item.amount_source_ccy, Currency.USD, item.value_date)
+        conv = currency_service.convert(item.amount_source_ccy, item.currency, item.value_date)
         totals[bracket].gross_gain_ils = round(totals[bracket].gross_gain_ils + conv.ils_amount, 2)
         totals[bracket].item_count += 1
 
     proceeds_total_ils = 0.0
-    for symbol, proceeds_usd in sale_proceeds_by_symbol_usd.items():
-        if proceeds_usd <= 0:
+    for symbol, proceeds_native in sale_proceeds_by_symbol_native.items():
+        if proceeds_native <= 0:
             continue  # net buyer for the year; not a sale
         # Symbol-level proceeds don't carry a single date (multiple lots);
         # use the latest trade date we have for that symbol as a
@@ -71,7 +78,7 @@ def build_nispach_c(
         on_date = max(matching_dates) if matching_dates else None
         if on_date is None:
             continue
-        conv = currency_service.convert(proceeds_usd, Currency.USD, on_date)
+        conv = currency_service.convert(proceeds_native, base_currency, on_date)
         proceeds_total_ils += conv.ils_amount
 
     return NispachCResult(

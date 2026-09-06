@@ -14,7 +14,7 @@ from app.mapping.classification import (
     NISPACH_D_FIELD_PAIRS,
     ClassifiedItem,
 )
-from app.models.transactions import Currency, Dividend
+from app.models.transactions import Dividend
 from app.services.currency_service import CurrencyService
 
 
@@ -59,8 +59,8 @@ def build_nispach_d(
         field = item.nispach_d_field
         tax_paid_field = NISPACH_D_FIELD_PAIRS[field]
 
-        income_conv = currency_service.convert(item.amount_source_ccy, Currency.USD, item.value_date)
-        tax_conv = currency_service.convert(item.withholding_source_ccy, Currency.USD, item.value_date)
+        income_conv = currency_service.convert(item.amount_source_ccy, item.currency, item.value_date)
+        tax_conv = currency_service.convert(item.withholding_source_ccy, item.currency, item.value_date)
 
         if item.source_kind == "dividend":
             div = dividends_by_id.get(item.source_id)
