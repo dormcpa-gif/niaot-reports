@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import require_api_key
+from app.api.routes_analysis import router as analysis_router
 from app.api.routes_clients import router as clients_router
 from app.api.routes_reports import router as reports_router
 from app.api.routes_statements import router as statements_router
@@ -42,3 +43,4 @@ def health() -> dict[str, str]:
 app.include_router(clients_router, dependencies=[Depends(require_api_key)])
 app.include_router(statements_router, dependencies=[Depends(require_api_key)])
 app.include_router(reports_router, dependencies=[Depends(require_api_key)])
+app.include_router(analysis_router, dependencies=[Depends(require_api_key)])

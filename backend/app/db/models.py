@@ -59,3 +59,25 @@ class StatementORM(Base):
     fx_rates_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
     client: Mapped[ClientORM] = relationship(back_populates="statements")
+
+
+class DeepAnalysisORM(Base):
+    """One LLM-driven deep-analysis run (see
+    app/services/llm_analysis_service.py) -- reconciling a full set of US
+    tax documents (1040/schedules/K-1/state returns/broker statements)
+    against Form 1301, as opposed to the single-broker-statement
+    extraction the `statements` table holds."""
+
+    __tablename__ = "deep_analyses"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    client_id: Mapped[str] = mapped_column(ForeignKey("clients.id"))
+    tax_year: Mapped[int] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    model: Mapped[str] = mapped_column(String)
+    # list[InputDocumentInfo] (model_dump(mode="json"))
+    input_documents_json: Mapped[list] = mapped_column(JSON)
+    narrative: Mapped[str] = mapped_column(String)
+    # dict | None
+    structured_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    structured_parse_error: Mapped[str | None] = mapped_column(String, nullable=True)

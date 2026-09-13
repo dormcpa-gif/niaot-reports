@@ -57,6 +57,34 @@ export interface StatementSummary {
   needs_review_count: number;
 }
 
+export interface InputDocumentInfo {
+  filename: string;
+  extracted_chars: number;
+  extraction_note: string | null;
+}
+
+export interface DeepAnalysisResult {
+  id: string;
+  client_id: string;
+  tax_year: number;
+  created_at: string;
+  model: string;
+  input_documents: InputDocumentInfo[];
+  narrative: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  structured: Record<string, any> | null;
+  structured_parse_error: string | null;
+}
+
+export interface DeepAnalysisSummary {
+  id: string;
+  client_id: string;
+  tax_year: number;
+  created_at: string;
+  input_filenames: string[];
+  narrative_excerpt: string;
+}
+
 export interface StatementDetail {
   id: string;
   client_id: string;
@@ -122,6 +150,27 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ field_overrides: fieldOverrides, bracket_overrides: bracketOverrides }),
     }),
+
+  listDeepAnalysesForClient: (clientId: string) =>
+    req<DeepAnalysisSummary[]>(`/analysis/by-client/${clientId}`),
+
+  getDeepAnalysis: (id: string) => req<DeepAnalysisResult>(`/analysis/${id}`),
+
+  createDeepAnalysis: async (
+    clientId: string,
+    taxYear: number,
+    files: File[],
+    clientContext: string
+  ): Promise<DeepAnalysisResult> => {
+    const form = new FormData();
+    form.append("client_id", clientId);
+    form.append("tax_year", String(taxYear));
+    form.append("client_context", clientContext);
+    for (const f of files) form.append("files", f);
+    const res = await fetch(`${API_BASE}/analysis/deep`, { method: "POST", body: form, headers: authHeaders() });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
 
   downloadAppendix: async (
     id: string,

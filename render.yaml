@@ -11,6 +11,8 @@ services:
         sync: false # set this to the same value as the frontend's login password (311576250) unless you want to rotate it
       - key: ALLOWED_ORIGINS
         value: https://niaot-reports.netlify.app
+      - key: ANTHROPIC_API_KEY
+        sync: false # required only for the "deep analysis (AI)" feature -- get one at console.anthropic.com. Every run is a real, billed API call.
     # NOTE: Render's free plan has an EPHEMERAL filesystem -- the SQLite
     # database at backend/data/app.db is wiped on every redeploy and on
     # any restart after ~15 minutes of inactivity (free plan spin-down).
