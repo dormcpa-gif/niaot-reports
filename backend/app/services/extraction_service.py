@@ -50,25 +50,48 @@ class ExtractionResult(BaseModel):
     dividends_by_id: dict[str, Dividend]
 
 
+def _dedupe_source_id(seen_counts: dict[str, int], source_id: str) -> str:
+    """classify_*'s source_id is a human-readable "{label} {date}" string,
+    not a guaranteed-unique key -- two distinct items of the same kind can
+    legitimately share one (e.g. two separate fee charges with the exact
+    same description posted on the exact same date, which happens on real
+    IBKR statements). A collision here is not just cosmetic: source_id is
+    used as the dict key for accountant overrides and for the dividend
+    lookup below, so two colliding items would silently share one
+    override/lookup slot. Disambiguate with a stable " #2", " #3", ...
+    suffix on every occurrence after the first, per kind."""
+    count = seen_counts.get(source_id, 0)
+    seen_counts[source_id] = count + 1
+    return source_id if count == 0 else f"{source_id} #{count + 1}"
+
+
 def extract_and_classify(file_bytes: bytes, statement_id: str, broker: str = "IBKR") -> ExtractionResult:
     parser = get_parser(broker)
     statement = parser.parse(file_bytes, statement_id)
 
     classified: list[ClassifiedItem] = []
     dividends_by_id: dict[str, Dividend] = {}
+    seen_counts: dict[str, int] = {}
 
     for d in statement.dividends:
         item = classify_dividend(d)
+        item.source_id = _dedupe_source_id(seen_counts, item.source_id)
         dividends_by_id[item.source_id] = d
         classified.append(item)
 
     for i in statement.interest:
-        classified.append(classify_interest(i))
+        item = classify_interest(i)
+        item.source_id = _dedupe_source_id(seen_counts, item.source_id)
+        classified.append(item)
 
     for t in statement.trades:
-        classified.append(classify_trade(t))
+        item = classify_trade(t)
+        item.source_id = _dedupe_source_id(seen_counts, item.source_id)
+        classified.append(item)
 
     for f in statement.fees:
-        classified.append(classify_fee(f))
+        item = classify_fee(f)
+        item.source_id = _dedupe_source_id(seen_counts, item.source_id)
+        classified.append(item)
 
     return ExtractionResult(statement=statement, classified=classified, dividends_by_id=dividends_by_id)

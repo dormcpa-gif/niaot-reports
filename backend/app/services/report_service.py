@@ -36,30 +36,13 @@ class AppendixReport(BaseModel):
     explanation_rows: list[ExplanationRow]
 
 
-def _source_table_and_text(statement: NormalizedStatement, kind: str, source_id: str) -> tuple[str, str]:
-    pools = {
+def _records_by_kind(statement: NormalizedStatement) -> dict[str, list]:
+    return {
         "dividend": statement.dividends,
         "interest": statement.interest,
         "trade": statement.trades,
         "fee": statement.fees,
     }
-    for record in pools.get(kind, []):
-        candidate_id = _record_source_id(record, kind)
-        if candidate_id == source_id:
-            return record.source.table_name, record.source.row_text
-    return "", ""
-
-
-def _record_source_id(record, kind: str) -> str:
-    if kind == "dividend":
-        return f"{record.symbol} {record.pay_date.isoformat()}"
-    if kind == "interest":
-        return f"{record.description} {record.value_date.isoformat()}"
-    if kind == "trade":
-        return f"{record.symbol} ({record.holding_term.value}-term, {record.close_date.isoformat()})"
-    if kind == "fee":
-        return f"{record.description} {record.value_date.isoformat()}"
-    raise ValueError(kind)
 
 
 def build_appendix_report(
@@ -77,9 +60,24 @@ def build_appendix_report(
         trade_items, statement.sale_proceeds_by_symbol, currency_service, bracket_overrides, statement.base_currency
     )
 
+    # classify_*() in extraction_service.extract_and_classify() produces
+    # exactly one ClassifiedItem per raw record, in the same order as
+    # statement.<kind> -- match them up by position instead of
+    # recomputing a "natural" source_id and string-matching it, which
+    # silently breaks for any item whose source_id was disambiguated
+    # (see extraction_service._dedupe_source_id) because two records
+    # shared the same natural label+date.
+    records_by_kind = _records_by_kind(statement)
+    next_index_by_kind: dict[str, int] = {}
+
     explanation_rows: list[ExplanationRow] = []
     for item in classified:
-        table_name, row_text = _source_table_and_text(statement, item.source_kind, item.source_id)
+        idx = next_index_by_kind.get(item.source_kind, 0)
+        next_index_by_kind[item.source_kind] = idx + 1
+        records = records_by_kind.get(item.source_kind, [])
+        record = records[idx] if idx < len(records) else None
+        table_name = record.source.table_name if record else ""
+        row_text = record.source.row_text if record else ""
         conv = currency_service.convert(item.amount_source_ccy, item.currency, item.value_date)
         if item.source_kind == "trade":
             target_field = "נספח ג' (רווח הון מני\"ע)"

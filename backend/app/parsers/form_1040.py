@@ -14,14 +14,35 @@ Use it only when the accountant has no itemized broker statement to work
 from and the 1040 is the only source available, and never combine it
 with an itemized statement covering the same income for the same year.
 
-Grounding note (read before trusting this like the IBKR parser): unlike
-IBKR, we have **no real signed 1040 to test against**. Form 1040 is a
-standardized IRS form with fixed line numbers, but PDF text-extraction
-order for a form laid out as label/box pairs is not guaranteed to match
-what we assume below. Treat every result with the same extra scrutiny
-as eToro/Schwab/K-1.
+Validated against one real, professionally-prepared 1040 (tax-prep
+software output) -- unlike the earlier revision of this module (which
+was pure guesswork from the IRS's own blank-form line numbers), the
+patterns below reflect an actual quirk of how that software's PDF
+extracts as text:
+  - The printed line-number column ("2a", "2b", "3a", "3b"...) and each
+    line's description text are NOT adjacent in extraction order -- a
+    naive "^2b Taxable interest" anchor never matches. What DOES appear
+    reliably is the description phrase itself immediately followed by a
+    run of "~" leader characters and then the dollar amount, e.g.
+    "Ordinary dividends ~~~~~ 6,472." -- so labels below are matched as
+    a substring anywhere on a line, and the amount is the LAST number
+    that appears after the label on that same line (a line can contain
+    more than one label+amount pair, e.g. "Qualified dividends ~~~~
+    1,556. Ordinary dividends ~~~~~ 6,472.").
+  - A filled-in whole-dollar amount can print with no cents digits at
+    all ("6,472." not "6,472.00") -- the amount pattern allows 0-2
+    digits after the decimal point, not exactly 2.
+  - A blank/zero line (e.g. this taxpayer's $0 taxable interest: "...
+    Tax-exempt interest ~~~ Taxable interest ~~~~~~" with nothing after
+    it) correctly yields no match here -- treated as "not present",
+    same as before.
 
-Lines extracted (2023/2024 revision line numbers):
+This was validated against only ONE real filer's software output, so a
+different tax-prep product could still lay the same lines out
+differently -- treat results with the same scrutiny as eToro/Schwab/K-1,
+just with one real data point behind it instead of zero.
+
+Lines extracted (2025 form revision):
   - Line 2b: Taxable interest -> InterestItem
   - Line 3b: Ordinary dividends -> Dividend (gross; includes qualified
     dividends from line 3a, so 3a is not extracted separately to avoid
@@ -52,37 +73,46 @@ from app.models.transactions import (
     Trade,
 )
 
-_NUM = r"\(?-?[\d,]+\.\d{2}\)?"
+_NUM_RE = re.compile(r"\(?-?[\d,]+\.\d{0,2}\)?")
+
+_INTEREST_LABELS = ("Taxable interest",)
+_DIVIDEND_LABELS = ("Ordinary dividends",)
+_CAPITAL_GAIN_LABELS = ("Capital gain or (loss)",)
 
 
 def _to_float(text: str) -> float:
-    text = text.strip()
+    text = text.strip().rstrip(".")
     negative = text.startswith("(") and text.endswith(")")
     if negative:
         text = text[1:-1]
+    if not text:
+        return 0.0
     value = float(text.replace(",", ""))
     return -value if negative else value
 
 
-def _find_line_amount(full_text: str, *labels: str) -> float | None:
-    lines = full_text.splitlines()
-    label_re = re.compile(r"^\s*(?:" + "|".join(re.escape(l) for l in labels) + r")(.*)$", re.IGNORECASE)
-    amount_re = re.compile(r"(" + _NUM + r")\s*$")
-    for idx, line in enumerate(lines):
-        m = label_re.match(line.strip())
-        if not m:
-            continue
-        amt_m = amount_re.search(m.group(1))
-        if amt_m:
-            return _to_float(amt_m.group(1))
-        for lookahead in lines[idx + 1 : idx + 3]:
-            amt_m = amount_re.search(lookahead.strip())
-            if amt_m:
-                return _to_float(amt_m.group(1))
+def _find_line_amount(pages_text: list[str], *labels: str) -> tuple[float, int, str] | None:
+    """Returns (amount, page_number, row_text) for the first line (across
+    all pages, in order) containing one of the given labels with a
+    number somewhere after it -- see module docstring for why matching
+    is substring-anywhere-on-the-line rather than anchored at the start."""
+    for page_num, text in enumerate(pages_text, start=1):
+        for line in text.splitlines():
+            for label in labels:
+                idx = line.find(label)
+                if idx == -1:
+                    continue
+                remainder = line[idx + len(label) :]
+                matches = list(_NUM_RE.finditer(remainder))
+                if matches:
+                    return _to_float(matches[-1].group(0)), page_num, line.strip()
     return None
 
 
 def _find_tax_year(full_text: str) -> int | None:
+    m = re.search(r"For the year Jan\.?\s*1\s*-\s*Dec\.?\s*31,\s*(\d{4})", full_text)
+    if m:
+        return int(m.group(1))
     m = re.search(r"(\d{4})\s+Form 1040", full_text)
     if m:
         return int(m.group(1))
@@ -96,7 +126,6 @@ def _sanity_check_is_1040(full_text: str) -> None:
     if "Form 1040" not in full_text or "U.S. Individual Income Tax Return" not in full_text:
         raise ValueError(
             "הקובץ אינו נראה כמו טופס 1040 (U.S. Individual Income Tax Return) - לא נמצאו הכותרות הצפויות. "
-            "פרסר זה טרם אומת מול מסמך אמיתי -- ראו הערת האמינות במסמך."
         )
 
 
@@ -107,63 +136,64 @@ class Form1040Parser:
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
             if not pdf.pages:
                 raise ValueError("קובץ ה-PDF ריק (0 עמודים).")
-            full_text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+            pages_text = [p.extract_text() or "" for p in pdf.pages]
 
+        full_text = "\n".join(pages_text)
         _sanity_check_is_1040(full_text)
         tax_year = _find_tax_year(full_text) or date.today().year - 1
         year_end = date(tax_year, 12, 31)
         year_start = date(tax_year, 1, 1)
-        source = SourceRef(statement_id=statement_id, page=1, table_name="Form 1040", row_text="")
 
-        interest_amount = _find_line_amount(full_text, "2b Taxable interest", "2b. Taxable interest")
-        dividend_amount = _find_line_amount(full_text, "3b Ordinary dividends", "3b. Ordinary dividends")
-        capital_gain = _find_line_amount(
-            full_text, "7 Capital gain or (loss)", "7. Capital gain or (loss)", "7 Capital gain"
-        )
+        interest_match = _find_line_amount(pages_text, *_INTEREST_LABELS)
+        dividend_match = _find_line_amount(pages_text, *_DIVIDEND_LABELS)
+        capital_gain_match = _find_line_amount(pages_text, *_CAPITAL_GAIN_LABELS)
 
         interest: list[InterestItem] = []
         dividends: list[Dividend] = []
         trades: list[Trade] = []
 
-        if interest_amount:
+        if interest_match:
+            amount, page_num, row_text = interest_match
             interest.append(
                 InterestItem(
                     value_date=year_end,
                     description="Form 1040 Line 2b: Taxable interest (aggregate, all payers)",
-                    amount=interest_amount,
+                    amount=amount,
                     currency=Currency.USD,
-                    source=source,
+                    source=SourceRef(statement_id=statement_id, page=page_num, table_name="Form 1040", row_text=row_text),
                 )
             )
-        if dividend_amount:
+        if dividend_match:
+            amount, page_num, row_text = dividend_match
             dividends.append(
                 Dividend(
                     pay_date=year_end,
                     symbol="1040 Line 3b",
                     description="Form 1040 Line 3b: Ordinary dividends (aggregate, all payers)",
-                    gross_amount=dividend_amount,
+                    gross_amount=amount,
                     currency=Currency.USD,
-                    source=source,
+                    source=SourceRef(statement_id=statement_id, page=page_num, table_name="Form 1040", row_text=row_text),
                 )
             )
-        if capital_gain:
+        if capital_gain_match:
+            amount, page_num, row_text = capital_gain_match
             trades.append(
                 Trade(
                     symbol="1040 Line 7",
                     close_date=year_end,
                     proceeds=0.0,
                     cost_basis=0.0,
-                    realized_pnl=round(capital_gain, 2),
+                    realized_pnl=round(amount, 2),
                     holding_term=HoldingTerm.SHORT,
                     currency=Currency.USD,
-                    source=source,
+                    source=SourceRef(statement_id=statement_id, page=page_num, table_name="Form 1040", row_text=row_text),
                 )
             )
 
         if not interest and not dividends and not trades:
             raise ValueError(
-                "לא זוהו שורות 2b / 3b / 7 בטופס. פרסר 1040 זה מבוסס על מבנה הטופס הרשמי של רשות המסים "
-                "האמריקאית (IRS) אך טרם נבדק מול מסמך אמיתי -- ייתכן שסדר חילוץ הטקסט מה-PDF שונה מהצפוי. "
+                "לא זוהו שורות 2b (ריבית) / 3b (דיבידנד) / 7 (רווח הון) בטופס. ייתכן שהמבנה בפועל של טופס זה "
+                "שונה מהצפוי (תלוי בתוכנת ההכנה שהפיקה את ה-PDF), או שכל שלושת השדות הללו ריקים/אפס אצל נישום זה. "
                 "יש לבדוק ידנית את הסכומים בטופס ולהזין אותם ידנית אם הפרסר לא זיהה אותם."
             )
 
