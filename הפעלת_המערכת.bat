@@ -28,8 +28,11 @@ echo.
 echo   כדי לכבות את המערכת - פשוט סגרו את שני
 echo   חלונות ה-cmd האלה (Backend ו-Frontend).
 echo.
-echo   הערה: הפעלת "ניתוח מעמיק (AI)" דורשת מפתח
-echo   ANTHROPIC_API_KEY - ראו backend\.env.example.
+echo   הערה: בהפעלה הראשונה אי-פעם (בסיס נתונים ריק),
+echo   יש להגדיר מראש ADMIN_EMAIL ו-ADMIN_PASSWORD
+echo   בסביבה כדי שייווצר משתמש מנהל ראשון - אחרת
+echo   לא יהיה עם מי להתחבר. הפעלת "ניתוח מעמיק (AI)"
+echo   דורשת גם ANTHROPIC_API_KEY. ראו backend\.env.example.
 echo ============================================
 echo.
 pause

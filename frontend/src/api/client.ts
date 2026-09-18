@@ -1,16 +1,42 @@
-import { getApiKey } from "../components/PasswordGate";
+import { getToken } from "../auth/tokenStorage";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
 function authHeaders(): Record<string, string> {
-  const key = getApiKey();
-  return key ? { "X-API-Key": key } : {};
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 export interface Client {
   id: string;
   full_name: string;
   tax_file_number: string | null;
+  created_by_name?: string | null;
+}
+
+export interface CurrentUser {
+  id: string;
+  email: string;
+  full_name: string;
+  role: "admin" | "employee";
+}
+
+export interface AdminUser extends CurrentUser {
+  is_active: boolean;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+export interface ActivityLogRow {
+  id: string;
+  user_id: string | null;
+  user_email: string | null;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  detail: Record<string, any> | null;
+  created_at: string;
 }
 
 export interface SourceRef {
@@ -111,6 +137,43 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  login: (email: string, password: string) =>
+    req<{ token: string; user: CurrentUser }>("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    }),
+  logout: () => req<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+  getMe: () => req<CurrentUser>("/auth/me"),
+
+  listUsers: () => req<AdminUser[]>("/admin/users"),
+  createUser: (full_name: string, email: string, password: string, role: "admin" | "employee") =>
+    req<AdminUser>("/admin/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ full_name, email, password, role }),
+    }),
+  updateUser: (id: string, patch: { role?: "admin" | "employee"; is_active?: boolean }) =>
+    req<AdminUser>(`/admin/users/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
+  resetPassword: (id: string, new_password: string) =>
+    req<{ ok: boolean }>(`/admin/users/${id}/reset-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ new_password }),
+    }),
+  getActivityLog: (params?: { user_id?: string; action?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.user_id) qs.set("user_id", params.user_id);
+    if (params?.action) qs.set("action", params.action);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return req<ActivityLogRow[]>(`/admin/activity${suffix}`);
+  },
+
   listClients: () => req<Client[]>("/clients"),
   createClient: (full_name: string, tax_file_number: string | null) =>
     req<Client>("/clients", {

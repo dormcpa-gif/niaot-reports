@@ -3,9 +3,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.db.models import DeepAnalysisORM
+from app.api.auth import get_current_user
+from app.db.models import DeepAnalysisORM, UserORM
 from app.db.session import get_session
 from app.models.analysis import DeepAnalysisResult, DeepAnalysisSummary, InputDocumentInfo
+from app.services.activity_log_service import log_activity
 from app.services.llm_analysis_service import run_deep_analysis
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -65,6 +67,7 @@ async def create_deep_analysis(
     tax_year: int = Form(...),
     client_context: str = Form(""),
     files: list[UploadFile] = File(...),
+    user: UserORM = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> DeepAnalysisResult:
     uploaded: list[tuple[str, bytes]] = []
@@ -90,8 +93,12 @@ async def create_deep_analysis(
         narrative=result.narrative,
         structured_json=result.structured,
         structured_parse_error=result.structured_parse_error,
+        created_by_user_id=user.id,
     )
     session.add(orm)
     session.commit()
+    log_activity(
+        session, user, "analysis.run", target_type="deep_analysis", target_id=orm.id, detail={"client_id": client_id}
+    )
 
     return result

@@ -8,11 +8,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.db.models import StatementORM
+from app.api.auth import get_current_user
+from app.db.models import StatementORM, UserORM
 from app.db.session import get_session
 from app.mapping.classification import ClassifiedItem
 from app.models.transactions import Currency, NormalizedStatement
 from app.output.excel_export import build_appendix_workbook
+from app.services.activity_log_service import log_activity
 from app.services.currency_service import CurrencyService
 from app.services.report_service import build_appendix_report
 
@@ -40,7 +42,12 @@ def _apply_overrides(classified: list[ClassifiedItem], overrides: dict) -> list[
 
 
 @router.post("/{statement_id}/appendix.xlsx")
-def generate_appendix_xlsx(statement_id: str, payload: ReportRequest, session: Session = Depends(get_session)) -> StreamingResponse:
+def generate_appendix_xlsx(
+    statement_id: str,
+    payload: ReportRequest,
+    user: UserORM = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
     orm = session.get(StatementORM, statement_id)
     if orm is None:
         raise HTTPException(status_code=404, detail="Statement not found")
@@ -65,6 +72,7 @@ def generate_appendix_xlsx(statement_id: str, payload: ReportRequest, session: S
 
     xlsx_bytes = build_appendix_workbook(report)
     filename = f"nespach_ezer_{statement_id[:8]}.xlsx"
+    log_activity(session, user, "appendix.download", target_type="statement", target_id=statement_id)
     return StreamingResponse(
         io.BytesIO(xlsx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

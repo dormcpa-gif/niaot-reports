@@ -21,6 +21,7 @@ export default function ClientsIndex() {
           <tr>
             <th>שם</th>
             <th>מספר תיק</th>
+            <th>נוצר על ידי</th>
             <th></th>
           </tr>
         </thead>
@@ -29,6 +30,7 @@ export default function ClientsIndex() {
             <tr key={c.id}>
               <td>{c.full_name}</td>
               <td>{c.tax_file_number ?? ""}</td>
+              <td>{c.created_by_name ?? ""}</td>
               <td>
                 <Link to={`/clients/${c.id}`}>דוחות הלקוח</Link>
               </td>

@@ -6,10 +6,12 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.db.models import StatementORM
+from app.api.auth import get_current_user
+from app.db.models import StatementORM, UserORM
 from app.db.session import get_session
 from app.mapping.classification import ClassifiedItem
 from app.models.transactions import NormalizedStatement
+from app.services.activity_log_service import log_activity
 from app.services.extraction_service import extract_and_classify
 
 router = APIRouter(prefix="/statements", tags=["statements"])
@@ -72,6 +74,7 @@ async def upload_statement(
     tax_year: int = Form(...),
     broker: str = Form("IBKR"),
     file: UploadFile = File(...),
+    user: UserORM = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> StatementSummaryOut:
     file_bytes = await file.read()
@@ -98,9 +101,18 @@ async def upload_statement(
         classified_items_json=[c.model_dump(mode="json") for c in result.classified],
         overrides_json={},
         fx_rates_json={},
+        created_by_user_id=user.id,
     )
     session.add(orm)
     session.commit()
+    log_activity(
+        session,
+        user,
+        "statement.upload",
+        target_type="statement",
+        target_id=orm.id,
+        detail={"client_id": client_id, "broker": broker, "tax_year": tax_year, "filename": orm.original_filename},
+    )
 
     return _summary_from_orm(orm)
 
@@ -132,9 +144,15 @@ class OverridesIn(BaseModel):
 
 
 @router.patch("/{statement_id}/overrides", response_model=StatementDetailOut)
-def update_overrides(statement_id: str, payload: OverridesIn, session: Session = Depends(get_session)) -> StatementDetailOut:
+def update_overrides(
+    statement_id: str,
+    payload: OverridesIn,
+    user: UserORM = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> StatementDetailOut:
     orm = _load(statement_id, session)
     orm.overrides_json = payload.model_dump(mode="json")
     session.add(orm)
     session.commit()
+    log_activity(session, user, "statement.overrides_update", target_type="statement", target_id=orm.id)
     return get_statement(statement_id, session)

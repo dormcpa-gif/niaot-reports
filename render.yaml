@@ -7,15 +7,20 @@ services:
     buildCommand: pip install -e .
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: API_SHARED_KEY
-        sync: false # set this to the same value as the frontend's login password (311576250) unless you want to rotate it
+      - key: ADMIN_EMAIL
+        sync: false # first admin account, created automatically on first startup -- see app/api/auth.py
+      - key: ADMIN_PASSWORD
+        sync: false # set a real password here; change it via the ניהול/admin panel after first login
       - key: ALLOWED_ORIGINS
         value: https://niaot-reports.netlify.app
       - key: ANTHROPIC_API_KEY
         sync: false # required only for the "deep analysis (AI)" feature -- get one at console.anthropic.com. Every run is a real, billed API call.
     # NOTE: Render's free plan has an EPHEMERAL filesystem -- the SQLite
-    # database at backend/data/app.db is wiped on every redeploy and on
-    # any restart after ~15 minutes of inactivity (free plan spin-down).
-    # That's fine for testing, but once this holds real client data,
-    # either upgrade to a paid plan with a persistent disk, or move to
-    # a managed Postgres database instead of SQLite.
+    # database at backend/data/app.db (now including ALL USER ACCOUNTS,
+    # not just client data) is wiped on every redeploy and on any restart
+    # after ~15 minutes of inactivity (free plan spin-down). That's fine
+    # for testing, but now that this holds real staff logins and real
+    # client data, upgrade to a paid plan with a persistent disk (or move
+    # to a managed Postgres database) BEFORE relying on this in daily use --
+    # otherwise every employee account gets silently wiped and only the
+    # bootstrap admin comes back on the next cold start.
