@@ -36,6 +36,23 @@ Design notes (why it's built this way):
   results with the same extra scrutiny as the eToro parser). Any other
   base currency is still rejected explicitly rather than silently
   mis-converted, since currency_service needs a matching FX rate table.
+
+- "Custom Consolidated" statements (one PDF spanning several IBKR
+  sub-accounts, e.g. Account "U2501546 (Custom Consolidated)",
+  Accounts Included "U3491144, U2501546") validated against a second
+  real statement -- these prefix every dated row with the sub-account
+  id (e.g. "U2501546 2025-03-03 2,760.00"), and pair different sections
+  side-by-side than a single-account statement does (Withholding Tax +
+  Dividends on one page; Interest + a section literally called "Other
+  Fees", not "Advisor Fees", on another -- see _is_two_column_page).
+  Sub-account attribution itself is discarded (all rows are merged into
+  one statement, same as the existing per-symbol aggregation) since
+  NormalizedStatement has no per-sub-account field. Known residual gap:
+  a row whose description wraps across three lines with the amount
+  alone on the middle line (no description text next to it, e.g. a
+  "...SYEP Interest for Feb-\n<account> <date> <amount>\n2025" split)
+  is correctly skipped rather than mis-parsed -- confirmed via a small
+  (~2%) shortfall against that statement's own printed interest total.
 """
 
 from __future__ import annotations
@@ -65,18 +82,39 @@ _PERIOD_RE = re.compile(
 )
 _BASE_CURRENCY_RE = re.compile(r"Base Currency\s+([A-Z]{3})")
 
+# A "Custom Consolidated" statement spanning multiple sub-accounts (see
+# module docstring) prefixes each dated amount with the sub-account id
+# (e.g. "U2501546") that row belongs to -- optional here so the same
+# regex handles both a single-account and a consolidated statement.
+_ACCOUNT_PREFIX = r"(?:[A-Z]\d{6,9}\s+)?"
+
 _DIVIDEND_RE = re.compile(
     r"(?P<symbol>[A-Z][A-Z0-9.]*)\((?P<isin>[A-Z0-9]{6,12})\)\s+Cash Dividend\s+"
     r"(?P<ccy>[A-Z]{3})\s+(?P<rate>[\d.]+)\s+per\s+"
-    r"(?:(?P<date1>" + _DATE + r")\s+(?P<amount1>" + _NUM + r")\s+)?"
+    r"(?:" + _ACCOUNT_PREFIX + r"(?P<date1>" + _DATE + r")\s+(?P<amount1>" + _NUM + r")\s+)?"
     r"Share\s+"
-    r"(?:(?P<date2>" + _DATE + r")\s+(?P<amount2>" + _NUM + r")\s+)?"
+    r"(?:" + _ACCOUNT_PREFIX + r"(?P<date2>" + _DATE + r")\s+(?P<amount2>" + _NUM + r")\s+)?"
     r"\((?P<divtype>[^)]+)\)",
     re.DOTALL,
 )
 
 _DATED_AMOUNT_ROW_RE = re.compile(
-    r"^(?P<date>" + _DATE + r")\s+(?P<desc>.+?)\s+(?P<amount>" + _NUM + r")$"
+    r"^" + _ACCOUNT_PREFIX + r"(?P<date>" + _DATE + r")\s+(?P<desc>.+?)\s+(?P<amount>" + _NUM + r")$"
+)
+
+# "Payment in Lieu of Dividend" (paid by a share borrower when the
+# lender's shares are on loan over an ex-dividend date, instead of an
+# actual dividend from the issuer) has no per-share CCY/rate portion at
+# all, unlike _DIVIDEND_RE above -- a structurally different row, not a
+# wrapping variant of the same one. Still real, taxable substitute
+# income though, so it's captured here (tagged in its description as a
+# substitute payment, not an actual dividend, for the accountant to
+# characterize correctly rather than silently treating it as identical).
+_PAYMENT_IN_LIEU_RE = re.compile(
+    r"(?P<symbol>[A-Z][A-Z0-9.]*)\((?P<isin>[A-Z0-9]{6,12})\)\s+Payment in Lieu of Dividend\s+"
+    r"" + _ACCOUNT_PREFIX + r"(?P<date>" + _DATE + r")\s+(?P<amount>" + _NUM + r")\s+"
+    r"\((?P<divtype>[^)]+)\)",
+    re.DOTALL,
 )
 
 _SYMBOL_TOKEN_RE = re.compile(r"^[A-Z][A-Z0-9.]*$")
@@ -132,6 +170,9 @@ def _sanity_check_is_ibkr_statement(full_text: str) -> None:
         )
 
 
+_EMBEDDED_DATE_AMOUNT_RE = re.compile(_ACCOUNT_PREFIX + r"(" + _DATE + r")\s+(" + _NUM + r")")
+
+
 def parse_dividends_text(
     text: str, statement_id: str, page: int, default_currency: Currency = Currency.USD
 ) -> list[Dividend]:
@@ -140,16 +181,44 @@ def parse_dividends_text(
     for m in _DIVIDEND_RE.finditer(flat):
         date_str = m.group("date1") or m.group("date2")
         amount_str = m.group("amount1") or m.group("amount2")
+        divtype = m.group("divtype")
         if not date_str or not amount_str:
-            continue
+            # A multi-word divtype (e.g. "Bonus Dividend") can wrap onto
+            # its own line in the source PDF, landing the date/amount
+            # token *inside* this capture once flattened (e.g. "(Bonus
+            # U2501546 2025-03-03 2,760.00 Dividend)") instead of before
+            # it -- recover them from there rather than dropping the row.
+            embedded = _EMBEDDED_DATE_AMOUNT_RE.search(divtype)
+            if not embedded:
+                continue
+            date_str, amount_str = embedded.group(1), embedded.group(2)
+            divtype = _flatten(divtype[: embedded.start()] + " " + divtype[embedded.end() :])
         out.append(
             Dividend(
                 pay_date=datetime.strptime(date_str, "%Y-%m-%d").date(),
                 symbol=m.group("symbol"),
                 isin=m.group("isin"),
-                description=m.group("divtype"),
+                description=divtype,
                 gross_amount=float(amount_str.replace(",", "")),
                 currency=Currency(m.group("ccy")) if m.group("ccy") in Currency.__members__ else default_currency,
+                source=SourceRef(
+                    statement_id=statement_id,
+                    page=page,
+                    table_name="Dividends",
+                    row_text=m.group(0),
+                ),
+            )
+        )
+
+    for m in _PAYMENT_IN_LIEU_RE.finditer(flat):
+        out.append(
+            Dividend(
+                pay_date=datetime.strptime(m.group("date"), "%Y-%m-%d").date(),
+                symbol=m.group("symbol"),
+                isin=m.group("isin"),
+                description=f"Payment in Lieu of Dividend ({m.group('divtype')}) -- תשלום תחליפי, לא דיבידנד ישירות מהמנפיק (המניה הייתה מושאלת)",
+                gross_amount=float(m.group("amount").replace(",", "")),
+                currency=default_currency,
                 source=SourceRef(
                     statement_id=statement_id,
                     page=page,
@@ -202,8 +271,18 @@ def parse_interest_text(
 
 
 def parse_fees_text(text: str, statement_id: str, page: int, currency: Currency = Currency.USD) -> list[FeeItem]:
-    block = _extract_block(text, "Advisor Fees")
-    if not block:
+    """Recognizes both "Advisor Fees" (a fixed advisory/AUM fee, seen on
+    single-account statements) and "Other Fees" (exposure fees, borrow
+    fees, class-action/snapshot fees etc., seen on "Custom Consolidated"
+    multi-sub-account statements instead) -- different real fee
+    categories IBKR uses depending on account setup, not a naming
+    inconsistency to normalize away; table_name below reflects which one
+    actually matched."""
+    for header in ("Advisor Fees", "Other Fees"):
+        block = _extract_block(text, header)
+        if block:
+            break
+    else:
         return []
     out: list[FeeItem] = []
     for line in block.splitlines():
@@ -216,7 +295,7 @@ def parse_fees_text(text: str, statement_id: str, page: int, currency: Currency 
                 value_date=datetime.strptime(m.group("date"), "%Y-%m-%d").date(),
                 amount=float(m.group("amount").replace(",", "")),
                 currency=currency,
-                source=SourceRef(statement_id=statement_id, page=page, table_name="Advisor Fees", row_text=line.strip()),
+                source=SourceRef(statement_id=statement_id, page=page, table_name=header, row_text=line.strip()),
             )
         )
     return out
@@ -306,9 +385,20 @@ def parse_trade_totals_text(text: str) -> dict[str, float]:
 
 
 def _is_two_column_page(text: str) -> bool:
+    """True for any page laid out as two side-by-side statement
+    sections. Which two sections varies:
+      - single-account statements: Dividends (left) + Fees/Interest (right)
+      - "Custom Consolidated" multi-sub-account statements (see module
+        docstring): Withholding Tax (left) + Dividends (right) on one
+        page, and separately Interest (left) + Fees (right) on another,
+        with no "Dividends" on that second kind of page at all.
+    Rather than hard-code which section is on which side (fragile, and
+    wrong here -- see below), the caller tries every extractor against
+    both crops and keeps whatever each one actually matches."""
     has_dividends = "Dividends" in text
     has_side_column = any(h in text for h in ("Fees", "Interest Accruals", "Deposits & Withdrawals", "Interest\n"))
-    return has_dividends and has_side_column
+    has_interest_and_fees = "Interest" in text and "Fees" in text
+    return (has_dividends and has_side_column) or has_interest_and_fees
 
 
 class IBKRActivityParser:
@@ -340,16 +430,22 @@ class IBKRActivityParser:
                     for symbol, proceeds in parse_trade_totals_text(text).items():
                         sale_proceeds_by_symbol[symbol] = sale_proceeds_by_symbol.get(symbol, 0.0) + proceeds
 
-                if "Dividends" in text:
-                    if _is_two_column_page(text):
-                        width = page.width
-                        left_text = page.crop((0, 0, width / 2, page.height)).extract_text() or ""
-                        right_text = page.crop((width / 2, 0, width, page.height)).extract_text() or ""
-                        dividends.extend(parse_dividends_text(left_text, statement_id, page_num, base_currency))
-                        interest.extend(parse_interest_text(right_text, statement_id, page_num, base_currency))
-                        fees.extend(parse_fees_text(right_text, statement_id, page_num, base_currency))
-                    else:
-                        dividends.extend(parse_dividends_text(text, statement_id, page_num, base_currency))
+                if _is_two_column_page(text):
+                    # Try every extractor against both halves instead of
+                    # assuming which side holds which section (see
+                    # _is_two_column_page docstring) -- each extractor's
+                    # own header/regex match is specific enough to come
+                    # back empty on the wrong half, so this is safe and
+                    # handles whichever pairing this page actually has.
+                    width = page.width
+                    left_text = page.crop((0, 0, width / 2, page.height)).extract_text() or ""
+                    right_text = page.crop((width / 2, 0, width, page.height)).extract_text() or ""
+                    for half in (left_text, right_text):
+                        dividends.extend(parse_dividends_text(half, statement_id, page_num, base_currency))
+                        interest.extend(parse_interest_text(half, statement_id, page_num, base_currency))
+                        fees.extend(parse_fees_text(half, statement_id, page_num, base_currency))
+                elif "Dividends" in text:
+                    dividends.extend(parse_dividends_text(text, statement_id, page_num, base_currency))
 
         return NormalizedStatement(
             statement_id=statement_id,
