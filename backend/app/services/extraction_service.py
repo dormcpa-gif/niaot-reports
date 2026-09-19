@@ -20,6 +20,7 @@ from app.parsers.ibkr_activity import IBKRActivityParser
 from app.parsers.k1_schedule import K1ScheduleParser
 from app.parsers.schwab_statement import SchwabStatementParser
 from app.parsers.tradestation_export import TradeStationExportParser
+from app.services.lot_matching import apply_lot_matching
 
 # IBKR also covers IBKR (U.K.) Limited / Central Europe accounts (same
 # statement layout, GBP/EUR base currency) -- see ibkr_activity.py.
@@ -67,7 +68,7 @@ def _dedupe_source_id(seen_counts: dict[str, int], source_id: str) -> str:
 
 def extract_and_classify(file_bytes: bytes, statement_id: str, broker: str = "IBKR") -> ExtractionResult:
     parser = get_parser(broker)
-    statement = parser.parse(file_bytes, statement_id)
+    statement = apply_lot_matching(parser.parse(file_bytes, statement_id))
 
     classified: list[ClassifiedItem] = []
     dividends_by_id: dict[str, Dividend] = {}

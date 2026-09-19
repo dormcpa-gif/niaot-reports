@@ -19,19 +19,19 @@ from app.parsers.ibkr_activity import (
 
 # Shape of a "Custom Consolidated" statement spanning multiple IBKR
 # sub-accounts (validated against a real one) -- every dated row is
-# prefixed with the sub-account id, e.g. "U2501546".
+# prefixed with the sub-account id, e.g. "U1234567".
 CONSOLIDATED_DIVIDENDS_BLOCK = """
 Dividends
 Account Date Description Amount
 USD
 CEG(US21037T1097) Cash Dividend USD 0.3878 per
-U2501546 2025-03-18 116.34
+U1234567 2025-03-18 116.34
 Share (Ordinary Dividend)
 KRE(US78464A6982) Payment in Lieu of Dividend
-U3491144 2025-09-24 1,280.75
+U7654321 2025-09-24 1,280.75
 (Ordinary Dividend)
 F(9599491) Cash Dividend USD 0.15 per Share (Bonus
-U2501546 2025-03-03 2,760.00
+U1234567 2025-03-03 2,760.00
 Dividend)
 """
 
@@ -39,8 +39,8 @@ CONSOLIDATED_INTEREST_BLOCK = """
 Interest
 Account Date Description Amount
 USD
-U2501546 2025-01-06 USD Credit Interest for Dec-2024 821.87
-U3491144 2025-04-03 USD Borrow Fees for Mar-2025 -328.87
+U1234567 2025-01-06 USD Credit Interest for Dec-2024 821.87
+U7654321 2025-04-03 USD Borrow Fees for Mar-2025 -328.87
 """
 
 CONSOLIDATED_OTHER_FEES_BLOCK = """
@@ -48,8 +48,8 @@ Fees
 Account Date Description Amount
 Other Fees
 USD
-U2501546 2025-03-07 Exposure Fee, Equity for 20250306 -2.56
-U3491144 2025-03-10 Exposure Fee, Equity for 20250308 -6.24
+U1234567 2025-03-07 Exposure Fee, Equity for 20250306 -2.56
+U7654321 2025-03-10 Exposure Fee, Equity for 20250308 -6.24
 """
 
 DIVIDENDS_BLOCK = """

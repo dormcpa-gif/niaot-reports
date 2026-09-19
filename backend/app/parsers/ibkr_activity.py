@@ -12,13 +12,14 @@ Design notes (why it's built this way):
   extracting text. Continuation pages (dividends only, no fee/interest
   block) are genuinely single-column full width, so they're read as-is.
 
-- Trade lot dates in the raw "Trades" table wrap unpredictably (the
-  Date/Time cell splits across the row it describes), which makes
-  per-lot regex parsing fragile. IBKR's own
-  "Realized & Unrealized Performance Summary" table instead gives one
-  clean, non-wrapping line per symbol with realized Short-Term and
-  Long-Term profit/loss already split out — that's what we parse for
-  capital gains instead of reconstructing trades ourselves.
+- Capital gains have two sources. The "Realized & Unrealized Performance
+  Summary" table gives one clean line per symbol (realized S/T and L/T
+  already split) and is the authority for each symbol's total. The raw
+  "Trades" table gives every execution with its date; its rows wrap
+  (date on the line above, sometimes the price too), so they are only
+  accepted right after a date line -- see parse_trade_executions_text.
+  services/lot_matching.py rebuilds per-lot trades from the executions
+  and uses them for a symbol only when they reconcile to the summary total.
 
 - The Short/Long-Term split captured here is informational (useful
   context for the accountant, and it's how IBKR/the US return sees it).
@@ -38,10 +39,10 @@ Design notes (why it's built this way):
   mis-converted, since currency_service needs a matching FX rate table.
 
 - "Custom Consolidated" statements (one PDF spanning several IBKR
-  sub-accounts, e.g. Account "U2501546 (Custom Consolidated)",
-  Accounts Included "U3491144, U2501546") validated against a second
+  sub-accounts, e.g. Account "U1234567 (Custom Consolidated)",
+  Accounts Included "U7654321, U1234567") validated against a second
   real statement -- these prefix every dated row with the sub-account
-  id (e.g. "U2501546 2025-03-03 2,760.00"), and pair different sections
+  id (e.g. "U1234567 2025-03-03 2,760.00"), and pair different sections
   side-by-side than a single-account statement does (Withholding Tax +
   Dividends on one page; Interest + a section literally called "Other
   Fees", not "Advisor Fees", on another -- see _is_two_column_page).
@@ -70,6 +71,7 @@ from app.models.transactions import (
     HoldingTerm,
     InterestItem,
     NormalizedStatement,
+    TradeExecution,
     SourceRef,
     Trade,
 )
@@ -84,7 +86,7 @@ _BASE_CURRENCY_RE = re.compile(r"Base Currency\s+([A-Z]{3})")
 
 # A "Custom Consolidated" statement spanning multiple sub-accounts (see
 # module docstring) prefixes each dated amount with the sub-account id
-# (e.g. "U2501546") that row belongs to -- optional here so the same
+# (e.g. "U1234567") that row belongs to -- optional here so the same
 # regex handles both a single-account and a consolidated statement.
 _ACCOUNT_PREFIX = r"(?:[A-Z]\d{6,9}\s+)?"
 
@@ -186,7 +188,7 @@ def parse_dividends_text(
             # A multi-word divtype (e.g. "Bonus Dividend") can wrap onto
             # its own line in the source PDF, landing the date/amount
             # token *inside* this capture once flattened (e.g. "(Bonus
-            # U2501546 2025-03-03 2,760.00 Dividend)") instead of before
+            # U1234567 2025-03-03 2,760.00 Dividend)") instead of before
             # it -- recover them from there rather than dropping the row.
             embedded = _EMBEDDED_DATE_AMOUNT_RE.search(divtype)
             if not embedded:
@@ -384,6 +386,67 @@ def parse_trade_totals_text(text: str) -> dict[str, float]:
     return out
 
 
+# A long trade price wraps: "2025-06-17, 698.78093333" then the row without its price column.
+_EXEC_DATE_LINE_RE = re.compile(r"^(" + _DATE + r"),\s*(?P<price>-?[\d,]*\.\d+)?")
+_EXEC_ROW_RE = re.compile(
+    r"^(?:(?P<account>[A-Z]\d{6,9})\s+)?(?P<symbol>[A-Z][A-Z0-9.]*)\s+"
+    r"(?P<qty>-?[\d,]+(?:\.\d+)?)\s+(?:(?P<price>-?[\d,]*\.\d+)\s+)?(?P<cprice>-?[\d,]*\.\d+)\s+"
+    r"(?P<proceeds>" + _NUM + r")\s+(?P<comm>" + _NUM + r")\s+(?P<basis>" + _NUM + r")\s+"
+    r"(?P<realized>" + _NUM + r")\s+(?P<mtm>" + _NUM + r")(?:\s+(?P<code>[A-Z;]+))?$"
+)
+
+
+def parse_trade_executions_text(
+    text: str, statement_id: str, page: int, currency: Currency = Currency.USD
+) -> list[TradeExecution]:
+    """Parse individual rows of the Trades table.
+
+    In the PDF text each execution is split over lines: the date on the
+    line before the row ("2025-09-24,"), the time on the line after. A
+    row is only accepted when the line right before it is such a date
+    line, which keeps look-alike rows elsewhere (positions, totals) out.
+    Rows with a different column layout (Forex, options) simply do not
+    match and are left to the summary-table path -- lot matching checks
+    every symbol against the statement's own realized totals, so a
+    silently skipped row shows up as a reconciliation warning.
+    """
+    out: list[TradeExecution] = []
+    pending_date: date | None = None
+    pending_price: float | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        d = _EXEC_DATE_LINE_RE.match(line)
+        if d:
+            pending_date = date.fromisoformat(d.group(1))
+            pending_price = float(d.group("price").replace(",", "")) if d.group("price") else None
+            continue
+        if pending_date is None:
+            continue
+        m = _EXEC_ROW_RE.match(line)
+        if not m:
+            if not re.match(r"^\d{2}:\d{2}:\d{2}$", line):
+                pending_date = None
+            continue
+        out.append(
+            TradeExecution(
+                account=m.group("account"),
+                symbol=m.group("symbol"),
+                executed_on=pending_date,
+                quantity=float(m.group("qty").replace(",", "")),
+                price=float(m.group("price").replace(",", "")) if m.group("price") else (pending_price or 0.0),
+                proceeds=float(m.group("proceeds").replace(",", "")),
+                commission=float(m.group("comm").replace(",", "")),
+                basis=float(m.group("basis").replace(",", "")),
+                realized_pnl=float(m.group("realized").replace(",", "")),
+                code=m.group("code"),
+                currency=currency,
+                source=SourceRef(statement_id=statement_id, page=page, table_name="Trades", row_text=line),
+            )
+        )
+        pending_date = None
+    return out
+
+
 def _is_two_column_page(text: str) -> bool:
     """True for any page laid out as two side-by-side statement
     sections. Which two sections varies:
@@ -409,6 +472,7 @@ class IBKRActivityParser:
         interest: list[InterestItem] = []
         fees: list[FeeItem] = []
         trades: list[Trade] = []
+        executions: list[TradeExecution] = []
         sale_proceeds_by_symbol: dict[str, float] = {}
 
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
@@ -425,6 +489,8 @@ class IBKRActivityParser:
 
                 if "Realized & Unrealized Performance Summary" in text:
                     trades.extend(parse_realized_pnl_text(text, statement_id, page_num, period_end, base_currency))
+
+                executions.extend(parse_trade_executions_text(text, statement_id, page_num, base_currency))
 
                 if re.search(r"^Trades$", text, re.MULTILINE):
                     for symbol, proceeds in parse_trade_totals_text(text).items():
@@ -458,4 +524,5 @@ class IBKRActivityParser:
             trades=trades,
             fees=fees,
             sale_proceeds_by_symbol=sale_proceeds_by_symbol,
+            executions=executions,
         )

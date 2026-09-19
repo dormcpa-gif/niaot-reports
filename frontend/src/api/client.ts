@@ -55,6 +55,10 @@ export interface ClassifiedItem {
   withholding_source_ccy: number;
   needs_review: boolean;
   review_reason: string | null;
+  // capital-gain lots only
+  symbol?: string | null;
+  lot_level?: boolean;
+  open_date?: string | null;
 }
 
 export interface NormalizedStatement {
@@ -237,12 +241,17 @@ export const api = {
 
   downloadAppendix: async (
     id: string,
-    fxRates: { currency: string; on_date: string; rate: number }[]
+    fxRates: { currency: string; on_date: string; rate: number }[],
+    options: { useBoiRates: boolean; acquisitionDates: Record<string, string> }
   ): Promise<Blob> => {
     const res = await fetch(`${API_BASE}/statements/${id}/appendix.xlsx`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ fx_rates: fxRates }),
+      body: JSON.stringify({
+        fx_rates: fxRates,
+        use_boi_rates: options.useBoiRates,
+        acquisition_dates: options.acquisitionDates,
+      }),
     });
     if (!res.ok) throw new Error(await res.text());
     return res.blob();

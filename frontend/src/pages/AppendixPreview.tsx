@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, type StatementDetail } from "../api/client";
 
+const radioLabelStyle = { flexDirection: "row", alignItems: "center", gap: 8, fontSize: 15, color: "inherit" } as const;
+
 interface RateRow {
   on_date: string;
   rate: string;
@@ -11,6 +13,8 @@ export default function AppendixPreview() {
   const { statementId } = useParams<{ statementId: string }>();
   const [detail, setDetail] = useState<StatementDetail | null>(null);
   const [rates, setRates] = useState<RateRow[]>([]);
+  const [useBoi, setUseBoi] = useState(true);
+  const [acqDates, setAcqDates] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,17 +39,18 @@ export default function AppendixPreview() {
 
   async function handleDownload() {
     if (!statementId) return;
-    const parsedRates = rates
-      .filter((r) => r.on_date && r.rate)
-      .map((r) => ({ currency: "USD", on_date: r.on_date, rate: Number(r.rate) }));
-    if (parsedRates.length === 0) {
-      setError('יש להזין לפחות שער המרה אחד (למשל שער יציג ליום 1 בינואר, לשימוש כשער כלל-שנתי)');
+    const parsedRates = useBoi
+      ? []
+      : rates.filter((r) => r.on_date && r.rate).map((r) => ({ currency: "USD", on_date: r.on_date, rate: Number(r.rate) }));
+    if (!useBoi && parsedRates.length === 0) {
+      setError("בהזנה ידנית יש להזין לפחות שער המרה אחד, או לבחור בשערי בנק ישראל");
       return;
     }
+    const acquisitionDates = Object.fromEntries(Object.entries(acqDates).filter(([, d]) => d));
     setBusy(true);
     setError(null);
     try {
-      const blob = await api.downloadAppendix(statementId, parsedRates);
+      const blob = await api.downloadAppendix(statementId, parsedRates, { useBoiRates: useBoi, acquisitionDates });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -62,6 +67,14 @@ export default function AppendixPreview() {
   if (error && !detail) return <p className="error">{error}</p>;
   if (!detail) return <p>טוען...</p>;
 
+  const symbolsMissingPurchaseDate = Array.from(
+    new Set(
+      detail.classified
+        .filter((c) => c.source_kind === "trade" && c.lot_level && !c.open_date && c.symbol)
+        .map((c) => c.symbol as string)
+    )
+  ).sort();
+
   return (
     <div className="page">
       <h1>הפקת נספח עזר</h1>
@@ -77,24 +90,60 @@ export default function AppendixPreview() {
 
       <section className="card">
         <h2>שערי המרה (דולר → שקל)</h2>
+        <label style={radioLabelStyle}>
+          <input type="radio" style={{ width: "auto", padding: 0 }} checked={useBoi} onChange={() => setUseBoi(true)} /> שער יציג של בנק ישראל לכל יום עסקים
+          (מומלץ)
+        </label>
         <p className="hint">
-          שער שמוזן ליום מוקדם משמש כברירת מחדל ("fallback") לכל עסקה מאוחרת יותר עד שער חדש - כך ניתן להזין שער יציג
-          יחיד לכל השנה (למשל 1 בינואר), או לפרט שערים חודשיים.
+          השערים נשלפים אוטומטית מבנק ישראל לכל תאריך עסקה, רכישה ומכירה - כנדרש לחישוב רווח הון לפי לוט. בסוף שבוע
+          וחג משמש השער האחרון שקדם להם, ומסומן בגיליון ההסבר.
         </p>
-        {rates.map((r, i) => (
-          <div className="row" key={i}>
-            <input type="date" value={r.on_date} onChange={(e) => updateRate(i, { on_date: e.target.value })} />
-            <input
-              type="number"
-              step="0.0001"
-              placeholder="שער (למשל 3.62)"
-              value={r.rate}
-              onChange={(e) => updateRate(i, { rate: e.target.value })}
-            />
-          </div>
-        ))}
-        <button onClick={addRateRow}>+ הוסף שער נוסף</button>
+        <label style={radioLabelStyle}>
+          <input type="radio" style={{ width: "auto", padding: 0 }} checked={!useBoi} onChange={() => setUseBoi(false)} /> הזנה ידנית
+        </label>
+        {!useBoi && (
+          <>
+            <p className="hint">
+              שער שמוזן ליום מוקדם משמש כברירת מחדל ("fallback") לכל עסקה מאוחרת יותר עד שער חדש. שים לב: שער יחיד לכל
+              השנה אינו מאפשר חישוב לפי לוט.
+            </p>
+            {rates.map((r, i) => (
+              <div className="row" key={i}>
+                <input type="date" value={r.on_date} onChange={(e) => updateRate(i, { on_date: e.target.value })} />
+                <input
+                  type="number"
+                  step="0.0001"
+                  placeholder="שער (למשל 3.62)"
+                  value={r.rate}
+                  onChange={(e) => updateRate(i, { rate: e.target.value })}
+                />
+              </div>
+            ))}
+            <button onClick={addRateRow}>+ הוסף שער נוסף</button>
+          </>
+        )}
       </section>
+
+      {symbolsMissingPurchaseDate.length > 0 && (
+        <section className="card">
+          <h2>תאריכי רכישה חסרים</h2>
+          <p className="hint">
+            לניירות הבאים נמכרו יחידות שנרכשו לפני תחילת הדוח (או הועברו לחשבון), ולכן תאריך הרכישה אינו מופיע בו. ללא
+            תאריך, הרווח מחושב בשער יום המכירה בלבד ועלול להיות מוגזם. אפשר להזין את תאריך הרכישה (מדוח שנה קודמת
+            או מאישור הרכישה); שדה ריק משאיר את החישוב הזהיר וממשיך לסמן את הפריט.
+          </p>
+          {symbolsMissingPurchaseDate.map((sym) => (
+            <div className="row" key={sym}>
+              <span>{sym}</span>
+              <input
+                type="date"
+                value={acqDates[sym] ?? ""}
+                onChange={(e) => setAcqDates((prev) => ({ ...prev, [sym]: e.target.value }))}
+              />
+            </div>
+          ))}
+        </section>
+      )}
 
       <button disabled={busy} onClick={handleDownload}>
         {busy ? "מפיק קובץ..." : "הורד נספח עזר (Excel)"}

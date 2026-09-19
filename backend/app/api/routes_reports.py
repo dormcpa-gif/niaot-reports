@@ -15,6 +15,7 @@ from app.mapping.classification import ClassifiedItem
 from app.models.transactions import Currency, NormalizedStatement
 from app.output.excel_export import build_appendix_workbook
 from app.services.activity_log_service import log_activity
+from app.services.boi_rates import BoiRatesUnavailable, fetch_rates_covering
 from app.services.currency_service import CurrencyService
 from app.services.report_service import build_appendix_report
 
@@ -28,7 +29,15 @@ class FxRateIn(BaseModel):
 
 
 class ReportRequest(BaseModel):
-    fx_rates: list[FxRateIn]
+    fx_rates: list[FxRateIn] = []
+    # None = automatic: official Bank of Israel rates when no manual rates
+    # were sent, manual rates only otherwise. True = Bank of Israel rates,
+    # with any manual rate overriding its own date. False = manual only.
+    use_boi_rates: bool | None = None
+    # {symbol: purchase date} for lots whose purchase is not visible in the
+    # statement (opened in a prior year / transferred in). Without it those
+    # lots are converted at the closing-date rate only and flagged.
+    acquisition_dates: dict[str, date] = {}
 
 
 def _apply_overrides(classified: list[ClassifiedItem], overrides: dict) -> list[ClassifiedItem]:
@@ -51,22 +60,43 @@ def generate_appendix_xlsx(
     orm = session.get(StatementORM, statement_id)
     if orm is None:
         raise HTTPException(status_code=404, detail="Statement not found")
-    if not payload.fx_rates:
-        raise HTTPException(status_code=422, detail="At least one FX rate is required to convert USD amounts to ILS.")
-
     statement = NormalizedStatement.model_validate(orm.normalized_statement_json)
     classified = [ClassifiedItem.model_validate(c) for c in orm.classified_items_json]
     classified = _apply_overrides(classified, orm.overrides_json or {})
 
     dividends_by_id = {f"{d.symbol} {d.pay_date.isoformat()}": d for d in statement.dividends}
 
-    rates = {(r.currency, r.on_date): r.rate for r in payload.fx_rates}
+    use_boi = payload.use_boi_rates if payload.use_boi_rates is not None else not payload.fx_rates
+    if not use_boi and not payload.fx_rates:
+        raise HTTPException(status_code=422, detail="יש להזין לפחות שער המרה אחד, או להשתמש בשערי בנק ישראל.")
+
+    rates: dict[tuple[Currency, date], float] = {}
+    if use_boi:
+        needed_dates = [c.value_date for c in classified] + [c.open_date for c in classified if c.open_date]
+        needed_dates += list(payload.acquisition_dates.values())
+        try:
+            rates.update(fetch_rates_covering({c.currency for c in classified}, needed_dates))
+        except BoiRatesUnavailable as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    rates.update({(r.currency, r.on_date): r.rate for r in payload.fx_rates})
+    if use_boi:
+        rate_source = "בנק ישראל - שער יציג לכל יום עסקים" + (" (עם שערים שהוזנו ידנית)" if payload.fx_rates else "")
+    else:
+        rate_source = "שערים שהוזנו ידנית"
     currency_service = CurrencyService(rates)
 
     bracket_overrides = (orm.overrides_json or {}).get("bracket_overrides", {})
 
     try:
-        report = build_appendix_report(statement, classified, dividends_by_id, currency_service, bracket_overrides)
+        report = build_appendix_report(
+            statement,
+            classified,
+            dividends_by_id,
+            currency_service,
+            bracket_overrides,
+            payload.acquisition_dates,
+            rate_source,
+        )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 

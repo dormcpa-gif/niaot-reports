@@ -18,8 +18,11 @@ confirmation -- see app/mapping/classification.py.
 
 from __future__ import annotations
 
+from datetime import date
+
 from pydantic import BaseModel
 
+from app.mapping.capital_gain_fx import convert_trade_item
 from app.mapping.classification import ClassifiedItem
 from app.models.transactions import Currency
 from app.services.currency_service import CurrencyService
@@ -38,6 +41,10 @@ class NispachCResult(BaseModel):
     bracket_totals: list[NispachCBracketTotal]
     total_sale_proceeds_ils: float  # "סכום המכירות" -- best-effort, see module docstring
     total_gain_ils: float  # goes to Form 1301 fields 137/138/139 via Nispach D 420/422
+    # For comparison: the same trades before the inflationary (FX) exemption,
+    # and the exempt amount itself (nominal = real + inflationary).
+    total_nominal_gain_ils: float = 0.0
+    total_inflationary_exempt_ils: float = 0.0
     needs_review: bool = True
 
 
@@ -47,6 +54,7 @@ def build_nispach_c(
     currency_service: CurrencyService,
     bracket_overrides: dict[str, str] | None = None,
     base_currency: Currency = Currency.USD,
+    acquisition_dates: dict[str, date] | None = None,
 ) -> NispachCResult:
     """bracket_overrides: {source_id: "30"} to move a specific trade out
     of the 25% default bracket, as confirmed by the accountant.
@@ -55,17 +63,24 @@ def build_nispach_c(
     come from the statement's own base currency (USD for a US IBKR
     account, GBP/EUR for an IBKR UK/Europe account) -- pass the
     statement's base_currency so the FX conversion below uses the right
-    rate table lookup instead of assuming USD."""
+    rate table lookup instead of assuming USD.
+
+    acquisition_dates: {symbol: date} supplied by the accountant for lots
+    whose purchase is not visible in the statement (see capital_gain_fx)."""
     overrides = bracket_overrides or {}
     totals: dict[str, NispachCBracketTotal] = {
         b: NispachCBracketTotal(tax_rate_percent=b, gross_gain_ils=0.0, item_count=0) for b in BRACKETS
     }
 
+    nominal_total = 0.0
+    inflationary_total = 0.0
     for item in classified_trades:
         bracket = overrides.get(item.source_id, DEFAULT_BRACKET)
-        conv = currency_service.convert(item.amount_source_ccy, item.currency, item.value_date)
-        totals[bracket].gross_gain_ils = round(totals[bracket].gross_gain_ils + conv.ils_amount, 2)
+        ils = convert_trade_item(item, currency_service, acquisition_dates)
+        totals[bracket].gross_gain_ils = round(totals[bracket].gross_gain_ils + ils.real_ils, 2)
         totals[bracket].item_count += 1
+        nominal_total += ils.nominal_ils
+        inflationary_total += ils.inflationary_ils
 
     proceeds_total_ils = 0.0
     for symbol, proceeds_native in sale_proceeds_by_symbol_native.items():
@@ -85,4 +100,6 @@ def build_nispach_c(
         bracket_totals=[t for t in totals.values() if t.item_count > 0],
         total_sale_proceeds_ils=round(proceeds_total_ils, 2),
         total_gain_ils=round(sum(t.gross_gain_ils for t in totals.values()), 2),
+        total_nominal_gain_ils=round(nominal_total, 2),
+        total_inflationary_exempt_ils=round(inflationary_total, 2),
     )
