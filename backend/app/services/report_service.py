@@ -38,6 +38,7 @@ class AppendixReport(BaseModel):
     nispach_c: NispachCResult
     nispach_d: NispachDResult
     explanation_rows: list[ExplanationRow]
+    rate_source: str = ""  # where the FX rates came from, shown in the workbook
 
 
 def _records_by_kind(statement: NormalizedStatement) -> dict[str, list]:
@@ -56,6 +57,7 @@ def build_appendix_report(
     currency_service: CurrencyService,
     bracket_overrides: dict[str, str] | None = None,
     acquisition_dates: dict[str, date] | None = None,
+    rate_source: str = "",
 ) -> AppendixReport:
     dividend_and_interest_items = [c for c in classified if c.source_kind in ("dividend", "interest")]
     trade_items = [c for c in classified if c.source_kind == "trade"]
@@ -128,4 +130,5 @@ def build_appendix_report(
         nispach_c=nispach_c,
         nispach_d=nispach_d,
         explanation_rows=explanation_rows,
+        rate_source=rate_source,
     )

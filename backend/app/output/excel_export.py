@@ -56,6 +56,8 @@ def build_appendix_workbook(report: AppendixReport) -> bytes:
     ws_c.append(["סה\"כ רווח הון (₪) - לפני קיזוז הפסדים", report.nispach_c.total_gain_ils])
     ws_c.append(["לצורך השוואה: רווח נומינלי (₪) - לפני פטור אינפלציוני", report.nispach_c.total_nominal_gain_ils])
     ws_c.append(["סכום אינפלציוני פטור (₪)", report.nispach_c.total_inflationary_exempt_ils])
+    if report.rate_source:
+        ws_c.append(["מקור שערי ההמרה", report.rate_source])
     ws_c.append([])
     ws_c.append([
         "הערה: הטבלה כוללת רק רווח הון גולמי לפני קיזוזי הפסדים משנים קודמות/שוטפים. "
