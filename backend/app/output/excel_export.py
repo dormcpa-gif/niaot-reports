@@ -54,6 +54,8 @@ def build_appendix_workbook(report: AppendixReport) -> bytes:
     ws_c.append([])
     ws_c.append(["סה\"כ המכירות (₪) - הערכה", report.nispach_c.total_sale_proceeds_ils])
     ws_c.append(["סה\"כ רווח הון (₪) - לפני קיזוז הפסדים", report.nispach_c.total_gain_ils])
+    ws_c.append(["לצורך השוואה: רווח נומינלי (₪) - לפני פטור אינפלציוני", report.nispach_c.total_nominal_gain_ils])
+    ws_c.append(["סכום אינפלציוני פטור (₪)", report.nispach_c.total_inflationary_exempt_ils])
     ws_c.append([])
     ws_c.append([
         "הערה: הטבלה כוללת רק רווח הון גולמי לפני קיזוזי הפסדים משנים קודמות/שוטפים. "
@@ -68,7 +70,7 @@ def build_appendix_workbook(report: AppendixReport) -> bytes:
         [
             "סוג", "מזהה מקור", "טבלת מקור בדוח", "שורת מקור",
             "סכום מקורי", "שער המרה", "שער חלופי (fallback)", "סכום בש\"ח",
-            "שדה יעד", "דורש אימות", "הערת אימות",
+            "שדה יעד", "דורש אימות", "הערת אימות", "פירוט חישוב",
         ],
     )
     for row in report.explanation_rows:
@@ -85,6 +87,7 @@ def build_appendix_workbook(report: AppendixReport) -> bytes:
                 row.target_field or "",
                 "כן" if row.needs_review else "לא",
                 row.review_reason or "",
+                row.calc_note or "",
             ]
         )
 

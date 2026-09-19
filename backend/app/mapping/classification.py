@@ -62,6 +62,16 @@ class ClassifiedItem(BaseModel):
     withholding_source_ccy: float = 0.0
     needs_review: bool = False
     review_reason: str | None = None
+    # Trades only. Set when the item is a single lot rebuilt from individual
+    # executions (see services/lot_matching.py); the gain's ILS value then
+    # comes from mapping/capital_gain_fx.py instead of one flat rate.
+    symbol: str | None = None
+    lot_level: bool = False
+    open_date: date_type | None = None
+    is_short: bool = False
+    proceeds_source_ccy: float | None = None  # sale-side cash of the lot
+    cost_source_ccy: float | None = None  # purchase-side cash of the lot (positive)
+    lot_note: str | None = None
 
 
 def classify_dividend(d: Dividend) -> ClassifiedItem:
@@ -108,7 +118,18 @@ def classify_trade(t: Trade) -> ClassifiedItem:
     kept as informational context only -- Israeli securities
     capital-gains brackets are not determined by US holding-period
     rules, so the accountant still picks/confirms the Nispach C
-    tax-rate column (see mapping/nispach_c.py)."""
+    tax-rate column (see mapping/nispach_c.py).
+
+    A lot-level trade carries its open date and both cash legs so the ILS
+    conversion can use each leg's own date's rate."""
+    reason = "רווח/הפסד הון ממכירת ני\"ע: מועבר לנספח ג'. יש לאמת את מדרגת המס (35/30/25/20/15%)."
+    if t.lot_level:
+        reason = (
+            "לוט בודד: עלות ותמורה מומרות כל אחת בשער יום העסקה שלה, והרווח הריאלי מוגבל לפי צו מס הכנסה "
+            "(נייר ערך זר). " + reason
+        )
+        if t.note:
+            reason = t.note + " " + reason
     return ClassifiedItem(
         source_kind="trade",
         source_id=f"{t.symbol} ({t.holding_term.value}-term, {t.close_date.isoformat()})",
@@ -117,7 +138,14 @@ def classify_trade(t: Trade) -> ClassifiedItem:
         currency=t.currency,
         value_date=t.close_date,
         needs_review=True,
-        review_reason='רווח/הפסד הון ממכירת ני"ע: מועבר לנספח ג\'. יש לאמת את מדרגת המס (35/30/25/20/15%).',
+        review_reason=reason,
+        symbol=t.symbol,
+        lot_level=t.lot_level,
+        open_date=t.open_date,
+        is_short=t.is_short,
+        proceeds_source_ccy=t.proceeds if t.lot_level else None,
+        cost_source_ccy=t.cost_basis if t.lot_level else None,
+        lot_note=t.note,
     )
 
 

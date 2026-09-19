@@ -29,6 +29,10 @@ class FxRateIn(BaseModel):
 
 class ReportRequest(BaseModel):
     fx_rates: list[FxRateIn]
+    # {symbol: purchase date} for lots whose purchase is not visible in the
+    # statement (opened in a prior year / transferred in). Without it those
+    # lots are converted at the closing-date rate only and flagged.
+    acquisition_dates: dict[str, date] = {}
 
 
 def _apply_overrides(classified: list[ClassifiedItem], overrides: dict) -> list[ClassifiedItem]:
@@ -66,7 +70,9 @@ def generate_appendix_xlsx(
     bracket_overrides = (orm.overrides_json or {}).get("bracket_overrides", {})
 
     try:
-        report = build_appendix_report(statement, classified, dividends_by_id, currency_service, bracket_overrides)
+        report = build_appendix_report(
+            statement, classified, dividends_by_id, currency_service, bracket_overrides, payload.acquisition_dates
+        )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 

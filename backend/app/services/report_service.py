@@ -6,8 +6,11 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from pydantic import BaseModel
 
+from app.mapping.capital_gain_fx import convert_trade_item
 from app.mapping.classification import ClassifiedItem
 from app.mapping.nispach_c import NispachCResult, build_nispach_c
 from app.mapping.nispach_d import NispachDResult, build_nispach_d
@@ -27,6 +30,7 @@ class ExplanationRow(BaseModel):
     target_field: str | None  # Nispach D field, or "נספח ג'" for capital gains, or None for fees
     needs_review: bool
     review_reason: str | None
+    calc_note: str | None = None  # how a capital-gain lot's ILS figure was derived
 
 
 class AppendixReport(BaseModel):
@@ -51,13 +55,19 @@ def build_appendix_report(
     dividends_by_id: dict[str, Dividend],
     currency_service: CurrencyService,
     bracket_overrides: dict[str, str] | None = None,
+    acquisition_dates: dict[str, date] | None = None,
 ) -> AppendixReport:
     dividend_and_interest_items = [c for c in classified if c.source_kind in ("dividend", "interest")]
     trade_items = [c for c in classified if c.source_kind == "trade"]
 
     nispach_d = build_nispach_d(dividend_and_interest_items, dividends_by_id, currency_service)
     nispach_c = build_nispach_c(
-        trade_items, statement.sale_proceeds_by_symbol, currency_service, bracket_overrides, statement.base_currency
+        trade_items,
+        statement.sale_proceeds_by_symbol,
+        currency_service,
+        bracket_overrides,
+        statement.base_currency,
+        acquisition_dates,
     )
 
     # classify_*() in extraction_service.extract_and_classify() produces
@@ -79,6 +89,17 @@ def build_appendix_report(
         table_name = record.source.table_name if record else ""
         row_text = record.source.row_text if record else ""
         conv = currency_service.convert(item.amount_source_ccy, item.currency, item.value_date)
+        fx_rate, amount_ils, calc_note = conv.rate_used, conv.ils_amount, None
+        if item.source_kind == "trade":
+            ils = convert_trade_item(item, currency_service, acquisition_dates)
+            fx_rate, amount_ils = ils.close_rate, ils.real_ils
+            if item.lot_level and ils.buy_rate is not None:
+                calc_note = (
+                    f"נומינלי ₪{ils.nominal_ils:,.2f} | אינפלציוני (פטור) ₪{ils.inflationary_ils:,.2f} | ריאלי ₪{ils.real_ils:,.2f}; "
+                    f"שער רכישה {ils.buy_rate}, שער מכירה {ils.sell_rate}, שער סגירה {ils.close_rate}"
+                )
+            else:
+                calc_note = ils.note
         if item.source_kind == "trade":
             target_field = "נספח ג' (רווח הון מני\"ע)"
         elif item.nispach_d_field:
@@ -92,12 +113,13 @@ def build_appendix_report(
                 source_table=table_name,
                 source_row_text=row_text,
                 amount_source_ccy=item.amount_source_ccy,
-                fx_rate=conv.rate_used,
+                fx_rate=fx_rate,
                 fx_rate_is_fallback=conv.is_fallback,
-                amount_ils=conv.ils_amount,
+                amount_ils=amount_ils,
                 target_field=target_field,
                 needs_review=item.needs_review,
                 review_reason=item.review_reason,
+                calc_note=calc_note,
             )
         )
 

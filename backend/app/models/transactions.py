@@ -73,6 +73,32 @@ class Trade(BaseModel):
     holding_term: HoldingTerm
     currency: Currency = Currency.USD
     source: SourceRef
+    # Lot-level detail, set only when the trade was rebuilt from individual
+    # executions (see services/lot_matching.py). A summary-table trade
+    # leaves these at their defaults and is converted at close_date only.
+    lot_level: bool = False
+    open_date: date | None = None  # None: opened before the statement period / not visible in it
+    is_short: bool = False  # True: sold first (open), bought back later (close)
+    note: str | None = None
+
+
+class TradeExecution(BaseModel):
+    """One row of the statement's Trades table, exactly as printed
+    (signs as IBKR prints them: a sale has positive proceeds and negative
+    quantity, a purchase the opposite)."""
+
+    account: str | None = None
+    symbol: str
+    executed_on: date
+    quantity: float
+    price: float
+    proceeds: float
+    commission: float
+    basis: float
+    realized_pnl: float
+    code: str | None = None
+    currency: Currency = Currency.USD
+    source: SourceRef
 
 
 class FeeItem(BaseModel):
@@ -101,3 +127,8 @@ class NormalizedStatement(BaseModel):
     # both bought and sold in the same year -- flagged as an
     # approximation the accountant should verify, not a precise total.
     sale_proceeds_by_symbol: dict[str, float] = Field(default_factory=dict)
+    # Individual Trades-table rows (IBKR only today); input to lot matching.
+    executions: list[TradeExecution] = Field(default_factory=list)
+    # Non-fatal findings the accountant should see (e.g. a symbol whose
+    # rebuilt lots did not reconcile to the statement's own realized total).
+    warnings: list[str] = Field(default_factory=list)
