@@ -38,10 +38,10 @@ Design notes (why it's built this way):
   mis-converted, since currency_service needs a matching FX rate table.
 
 - "Custom Consolidated" statements (one PDF spanning several IBKR
-  sub-accounts, e.g. Account "U2501546 (Custom Consolidated)",
-  Accounts Included "U3491144, U2501546") validated against a second
+  sub-accounts, e.g. Account "U1234567 (Custom Consolidated)",
+  Accounts Included "U7654321, U1234567") validated against a second
   real statement -- these prefix every dated row with the sub-account
-  id (e.g. "U2501546 2025-03-03 2,760.00"), and pair different sections
+  id (e.g. "U1234567 2025-03-03 2,760.00"), and pair different sections
   side-by-side than a single-account statement does (Withholding Tax +
   Dividends on one page; Interest + a section literally called "Other
   Fees", not "Advisor Fees", on another -- see _is_two_column_page).
@@ -84,7 +84,7 @@ _BASE_CURRENCY_RE = re.compile(r"Base Currency\s+([A-Z]{3})")
 
 # A "Custom Consolidated" statement spanning multiple sub-accounts (see
 # module docstring) prefixes each dated amount with the sub-account id
-# (e.g. "U2501546") that row belongs to -- optional here so the same
+# (e.g. "U1234567") that row belongs to -- optional here so the same
 # regex handles both a single-account and a consolidated statement.
 _ACCOUNT_PREFIX = r"(?:[A-Z]\d{6,9}\s+)?"
 
@@ -186,7 +186,7 @@ def parse_dividends_text(
             # A multi-word divtype (e.g. "Bonus Dividend") can wrap onto
             # its own line in the source PDF, landing the date/amount
             # token *inside* this capture once flattened (e.g. "(Bonus
-            # U2501546 2025-03-03 2,760.00 Dividend)") instead of before
+            # U1234567 2025-03-03 2,760.00 Dividend)") instead of before
             # it -- recover them from there rather than dropping the row.
             embedded = _EMBEDDED_DATE_AMOUNT_RE.search(divtype)
             if not embedded:
