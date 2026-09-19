@@ -209,3 +209,66 @@ def test_nispach_c_reports_real_nominal_and_exempt_totals():
     assert result.total_gain_ils == 732.6
     assert result.total_nominal_gain_ils == 832.7
     assert result.total_inflationary_exempt_ils == 100.1
+
+
+# ---- sales total and forex ----
+
+REALIZED_WITH_FOREX = """
+Realized & Unrealized Performance Summary
+Realized Unrealized
+Symbol Cost Adj. S/T Profit S/T Loss L/T Profit L/T Loss Total S/T Profit S/T Loss L/T Profit L/T Loss Total Total Code
+Stocks
+QQQ 0.00 100.00 0.00 0.00 0.00 100.00 0.00 0.00 0.00 0.00 0.00 100.00
+Total Stocks 0.00 100.00 0.00 0.00 0.00 100.00 0.00 0.00 0.00 0.00 0.00 100.00
+Forex
+ILS 0.00 50.00 0.00 0.00 0.00 50.00 0.00 0.00 0.00 0.00 0.00 50.00
+Total Forex 0.00 50.00 0.00 0.00 0.00 50.00 0.00 0.00 0.00 0.00 0.00 50.00
+"""
+
+
+def test_realized_table_rows_are_tagged_with_their_section():
+    from app.parsers.ibkr_activity import parse_realized_pnl_text
+
+    trades = parse_realized_pnl_text(REALIZED_WITH_FOREX, "s", 2, date(2025, 12, 31))
+    assert {t.symbol: t.asset_class for t in trades} == {"QQQ": "Stocks", "ILS": "Forex"}
+
+
+def test_forex_profit_is_kept_out_of_the_totals_and_shown_separately():
+    stock = Trade(symbol="QQQ", close_date=date(2025, 3, 10), proceeds=0, cost_basis=0, realized_pnl=100.0,
+                  holding_term=HoldingTerm.SHORT, source=SRC, asset_class="Stocks")
+    forex = Trade(symbol="ILS", close_date=date(2025, 3, 10), proceeds=0, cost_basis=0, realized_pnl=50.0,
+                  holding_term=HoldingTerm.SHORT, source=SRC, asset_class="Forex")
+    cs = _cs({date(2025, 3, 10): 3.7})
+    result = build_nispach_c([_item(stock), _item(forex)], {}, cs)
+    assert result.total_gain_ils == 370.0
+    assert result.excluded_forex_gain_ils == 185.0
+    assert sum(b.item_count for b in result.bracket_totals) == 1
+
+
+def test_sales_total_is_the_sale_side_cash_of_every_lot_at_its_own_rate():
+    long_lot = match_lots([_ex(date(2025, 1, 10), 100, -1000), _ex(date(2025, 3, 10), -100, 1200, code="C;P")], "s")[0]
+    short_lot = match_lots(
+        [_ex(date(2025, 1, 10), -50, 600, symbol="SSS"), _ex(date(2025, 3, 10), 50, -500, symbol="SSS", code="C;P")], "s"
+    )[0]
+    cs = _cs({date(2025, 1, 10): 3.6, date(2025, 3, 10): 3.7})
+    result = build_nispach_c([_item(long_lot), _item(short_lot)], {"ABC": 999999.0, "SSS": 999999.0}, cs)
+    # long: sale on 3/10 (1199 net of commission x 3.7); short: sale on 1/10 (599 x 3.6) -- the buy-back adds nothing
+    assert result.total_sale_proceeds_ils == round(1199 * 3.7 + 599 * 3.6, 2)
+    assert result.sale_proceeds_is_estimate is False  # the symbol-level estimate is ignored once lots exist
+
+
+def test_a_short_sale_made_in_a_prior_year_is_not_counted_as_this_years_sale():
+    lot = match_lots([_ex(date(2025, 3, 10), 100, -1000, basis=1200.0, code="C;P")], "s")[0]
+    assert lot.is_short is True and lot.open_date is None
+    cs = _cs({date(2024, 12, 9): 3.5, date(2025, 3, 10): 3.7})
+    result = build_nispach_c([_item(lot)], {}, cs, acquisition_dates={"ABC": date(2024, 12, 9)})
+    assert result.total_sale_proceeds_ils == 0.0
+
+
+def test_summary_only_symbols_still_use_the_labelled_estimate():
+    summary = Trade(symbol="QQQ", close_date=date(2025, 9, 11), proceeds=0, cost_basis=0, realized_pnl=10.0,
+                    holding_term=HoldingTerm.LONG, source=SRC)
+    cs = _cs({date(2025, 9, 11): 3.6})
+    result = build_nispach_c([_item(summary)], {"QQQ": 5000.0}, cs)
+    assert result.total_sale_proceeds_ils == 18000.0
+    assert result.sale_proceeds_is_estimate is True

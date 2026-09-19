@@ -88,6 +88,19 @@ export default function AppendixPreview() {
         {detail.statement.period_end}
       </p>
 
+      {(detail.statement.warnings?.length ?? 0) > 0 && (
+        <section className="card">
+          <h2>אזהרות בדוח</h2>
+          <ul>
+            {detail.statement.warnings!.map((w, i) => (
+              <li key={i} className="error">
+                {w}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="card">
         <h2>שערי המרה (דולר → שקל)</h2>
         <label style={radioLabelStyle}>

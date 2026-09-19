@@ -72,6 +72,7 @@ class ClassifiedItem(BaseModel):
     proceeds_source_ccy: float | None = None  # sale-side cash of the lot
     cost_source_ccy: float | None = None  # purchase-side cash of the lot (positive)
     lot_note: str | None = None
+    asset_class: str | None = None  # "Forex" trades are kept out of Nispach C's total
 
 
 def classify_dividend(d: Dividend) -> ClassifiedItem:
@@ -146,6 +147,7 @@ def classify_trade(t: Trade) -> ClassifiedItem:
         proceeds_source_ccy=t.proceeds if t.lot_level else None,
         cost_source_ccy=t.cost_basis if t.lot_level else None,
         lot_note=t.note,
+        asset_class=t.asset_class,
     )
 
 

@@ -36,6 +36,10 @@ class TradeIls(BaseModel):
     close_rate: float
     buy_rate: float | None = None
     sell_rate: float | None = None
+    # Cash received by the sale leg of this lot, at that leg's own date's rate
+    # (feeds "סכום המכירות"). None when the sale happened before the statement
+    # period (short position opened in a prior year) or the item is not a lot.
+    sale_proceeds_ils: float | None = None
     note: str | None = None
 
 
@@ -53,13 +57,30 @@ def convert_trade_item(
     close = currency_service.convert(item.amount_source_ccy, item.currency, item.value_date)
     raw_real = round(item.amount_source_ccy * close.rate_used, 2)
 
-    def fallback(reason: str | None) -> TradeIls:
-        return TradeIls(real_ils=raw_real, nominal_ils=raw_real, inflationary_ils=0.0, close_rate=close.rate_used, note=reason)
+    is_lot = item.lot_level and item.proceeds_source_ccy is not None and item.cost_source_ccy is not None
+    open_date = item.open_date or (acquisition_dates or {}).get(item.symbol or "")
 
-    if not item.lot_level or item.proceeds_source_ccy is None or item.cost_source_ccy is None:
+    sale_ils: float | None = None
+    if is_lot:
+        if not item.is_short:
+            sale_ils = round(item.proceeds_source_ccy * close.rate_used, 2)
+        elif item.open_date is not None:  # the short sale is inside this statement, not a prior year's
+            try:
+                sale_ils = round(
+                    item.proceeds_source_ccy * currency_service.convert(0.0, item.currency, item.open_date).rate_used, 2
+                )
+            except ValueError:
+                sale_ils = None
+
+    def fallback(reason: str | None) -> TradeIls:
+        return TradeIls(
+            real_ils=raw_real, nominal_ils=raw_real, inflationary_ils=0.0, close_rate=close.rate_used,
+            sale_proceeds_ils=sale_ils, note=reason,
+        )
+
+    if not is_lot:
         return fallback(None)
 
-    open_date = item.open_date or (acquisition_dates or {}).get(item.symbol or "")
     if open_date is None:
         return fallback("תאריך רכישה לא ידוע - הרווח חושב בשער יום הסגירה בלבד, ללא הגבלת הרווח הריאלי (עלול להיות מוגזם).")
 
@@ -79,4 +100,5 @@ def convert_trade_item(
         close_rate=close.rate_used,
         buy_rate=buy.rate_used,
         sell_rate=sell.rate_used,
+        sale_proceeds_ils=sale_ils,
     )

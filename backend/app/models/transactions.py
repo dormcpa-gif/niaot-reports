@@ -80,6 +80,9 @@ class Trade(BaseModel):
     open_date: date | None = None  # None: opened before the statement period / not visible in it
     is_short: bool = False  # True: sold first (open), bought back later (close)
     note: str | None = None
+    # Section of the realized-P/L table the row came from ("Stocks", "Futures",
+    # "Forex"...). Only known for summary-table trades.
+    asset_class: str | None = None
 
 
 class TradeExecution(BaseModel):

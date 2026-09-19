@@ -72,6 +72,7 @@ export interface NormalizedStatement {
   trades: unknown[];
   fees: unknown[];
   sale_proceeds_by_symbol: Record<string, number>;
+  warnings?: string[];
 }
 
 export interface StatementSummary {

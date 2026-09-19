@@ -45,6 +45,13 @@ class NispachCResult(BaseModel):
     # and the exempt amount itself (nominal = real + inflationary).
     total_nominal_gain_ils: float = 0.0
     total_inflationary_exempt_ils: float = 0.0
+    # "סכום המכירות" is exact when every symbol was rebuilt from lots (sum of each
+    # lot's sale-side cash at its own date's rate, matching the accountant's
+    # workpaper); True when at least one symbol still uses the old net estimate.
+    sale_proceeds_is_estimate: bool = False
+    # Currency-conversion (Forex) profit is not a securities gain: it is kept out
+    # of every total above and shown separately for the accountant's decision.
+    excluded_forex_gain_ils: float = 0.0
     needs_review: bool = True
 
 
@@ -74,16 +81,28 @@ def build_nispach_c(
 
     nominal_total = 0.0
     inflationary_total = 0.0
+    forex_total = 0.0
+    lot_sales_total = 0.0
+    symbols_from_lots: set[str] = set()
     for item in classified_trades:
-        bracket = overrides.get(item.source_id, DEFAULT_BRACKET)
         ils = convert_trade_item(item, currency_service, acquisition_dates)
+        if item.asset_class == "Forex":
+            forex_total += ils.real_ils
+            continue
+        bracket = overrides.get(item.source_id, DEFAULT_BRACKET)
+        if item.lot_level and item.symbol:
+            symbols_from_lots.add(item.symbol)
+            lot_sales_total += ils.sale_proceeds_ils or 0.0
         totals[bracket].gross_gain_ils = round(totals[bracket].gross_gain_ils + ils.real_ils, 2)
         totals[bracket].item_count += 1
         nominal_total += ils.nominal_ils
         inflationary_total += ils.inflationary_ils
 
-    proceeds_total_ils = 0.0
+    proceeds_total_ils = lot_sales_total
+    estimate_used = False
     for symbol, proceeds_native in sale_proceeds_by_symbol_native.items():
+        if symbol in symbols_from_lots:
+            continue  # already counted exactly, lot by lot
         if proceeds_native <= 0:
             continue  # net buyer for the year; not a sale
         # Symbol-level proceeds don't carry a single date (multiple lots);
@@ -95,6 +114,7 @@ def build_nispach_c(
             continue
         conv = currency_service.convert(proceeds_native, base_currency, on_date)
         proceeds_total_ils += conv.ils_amount
+        estimate_used = True
 
     return NispachCResult(
         bracket_totals=[t for t in totals.values() if t.item_count > 0],
@@ -102,4 +122,6 @@ def build_nispach_c(
         total_gain_ils=round(sum(t.gross_gain_ils for t in totals.values()), 2),
         total_nominal_gain_ils=round(nominal_total, 2),
         total_inflationary_exempt_ils=round(inflationary_total, 2),
+        sale_proceeds_is_estimate=estimate_used or not symbols_from_lots,
+        excluded_forex_gain_ils=round(forex_total, 2),
     )

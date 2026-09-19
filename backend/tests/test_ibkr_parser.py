@@ -197,3 +197,39 @@ def test_is_two_column_page_detects_interest_plus_fees_with_no_dividends_mention
     combined = CONSOLIDATED_INTEREST_BLOCK + CONSOLIDATED_OTHER_FEES_BLOCK
     assert "Dividends" not in combined
     assert _is_two_column_page(combined) is True
+
+
+WRAPPED_INTEREST_BLOCK = """
+Interest
+Account Date Description Amount
+USD
+U1234567 2025-11-05 USD Credit Interest for Oct-2025 712.51
+USD IBKR Managed Securities (SYEP) Interest for Oct-
+U1234567 2025-11-05 24.51
+2025
+U1234567 2025-11-05 USD Short Credit Interest for Oct-2025 844.64
+"""
+
+STRAY_DATED_LINE_BLOCK = """
+Interest
+Account Date Description Amount
+USD
+U1234567 2025-11-05 USD Credit Interest for Oct-2025 712.51
+U1234567 2025-11-05 24.51
+U1234567 2025-11-05 USD Short Credit Interest for Oct-2025 844.64
+"""
+
+
+def test_interest_row_whose_description_wraps_around_the_amount_line_is_recovered():
+    result = parse_interest_text(WRAPPED_INTEREST_BLOCK, "stmt-1", page=12)
+    assert len(result) == 3
+    syep = next(i for i in result if "SYEP" in i.description)
+    assert syep.amount == 24.51
+    assert syep.value_date == date(2025, 11, 5)
+    assert syep.description == "USD IBKR Managed Securities (SYEP) Interest for Oct-2025"
+    assert round(sum(i.amount for i in result), 2) == 1581.66
+
+
+def test_a_lone_dated_amount_without_the_wrapped_description_shape_is_not_guessed():
+    result = parse_interest_text(STRAY_DATED_LINE_BLOCK, "stmt-1", page=12)
+    assert [i.amount for i in result] == [712.51, 844.64]

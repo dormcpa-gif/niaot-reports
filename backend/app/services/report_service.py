@@ -39,6 +39,7 @@ class AppendixReport(BaseModel):
     nispach_d: NispachDResult
     explanation_rows: list[ExplanationRow]
     rate_source: str = ""  # where the FX rates came from, shown in the workbook
+    warnings: list[str] = []  # statement-level findings (e.g. a symbol that did not reconcile)
 
 
 def _records_by_kind(statement: NormalizedStatement) -> dict[str, list]:
@@ -102,7 +103,9 @@ def build_appendix_report(
                 )
             else:
                 calc_note = ils.note
-        if item.source_kind == "trade":
+        if item.source_kind == "trade" and item.asset_class == "Forex":
+            target_field = "לא נכלל בנספח ג' - רווח ממט\"ח (לבדיקת רו\"ח)"
+        elif item.source_kind == "trade":
             target_field = "נספח ג' (רווח הון מני\"ע)"
         elif item.nispach_d_field:
             target_field = f"נספח ד' שדה {item.nispach_d_field}"
@@ -131,4 +134,5 @@ def build_appendix_report(
         nispach_d=nispach_d,
         explanation_rows=explanation_rows,
         rate_source=rate_source,
+        warnings=list(statement.warnings),
     )

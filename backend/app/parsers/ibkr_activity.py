@@ -48,12 +48,11 @@ Design notes (why it's built this way):
   Fees", not "Advisor Fees", on another -- see _is_two_column_page).
   Sub-account attribution itself is discarded (all rows are merged into
   one statement, same as the existing per-symbol aggregation) since
-  NormalizedStatement has no per-sub-account field. Known residual gap:
-  a row whose description wraps across three lines with the amount
-  alone on the middle line (no description text next to it, e.g. a
-  "...SYEP Interest for Feb-\n<account> <date> <amount>\n2025" split)
-  is correctly skipped rather than mis-parsed -- confirmed via a small
-  (~2%) shortfall against that statement's own printed interest total.
+  NormalizedStatement has no per-sub-account field. A row whose
+  description wraps around the amount line ("...SYEP Interest for Nov-",
+  then "<account> <date> <amount>", then "2025") is recovered only in
+  exactly that shape; interest then matches the statement's own printed
+  total exactly (checked against a real consolidated statement).
 """
 
 from __future__ import annotations
@@ -112,6 +111,8 @@ _DATED_AMOUNT_ROW_RE = re.compile(
 # income though, so it's captured here (tagged in its description as a
 # substitute payment, not an actual dividend, for the accountant to
 # characterize correctly rather than silently treating it as identical).
+_LONE_AMOUNT_ROW_RE = re.compile(r"^" + _ACCOUNT_PREFIX + r"(?P<date>" + _DATE + r")\s+(?P<amount>" + _NUM + r")$")
+
 _PAYMENT_IN_LIEU_RE = re.compile(
     r"(?P<symbol>[A-Z][A-Z0-9.]*)\((?P<isin>[A-Z0-9]{6,12})\)\s+Payment in Lieu of Dividend\s+"
     r"" + _ACCOUNT_PREFIX + r"(?P<date>" + _DATE + r")\s+(?P<amount>" + _NUM + r")\s+"
@@ -120,6 +121,7 @@ _PAYMENT_IN_LIEU_RE = re.compile(
 )
 
 _SYMBOL_TOKEN_RE = re.compile(r"^[A-Z][A-Z0-9.]*$")
+_ASSET_SECTIONS = {"Stocks", "Futures", "Forex", "Options", "Bonds", "Notes"}
 _SKIP_SYMBOLS = {"Total", "Stocks", "Forex", "Bonds", "Options", "Notes"}
 
 
@@ -256,17 +258,33 @@ def parse_interest_text(
     if not block:
         return []
     out: list[InterestItem] = []
-    for line in block.splitlines():
-        m = _DATED_AMOUNT_ROW_RE.match(line.strip())
+    lines = [ln.strip() for ln in block.splitlines()]
+    for idx, line in enumerate(lines):
+        m = _DATED_AMOUNT_ROW_RE.match(line)
+        description = m.group("desc").strip() if m else None
+        row_text = line
         if not m:
-            continue
+            lone = _LONE_AMOUNT_ROW_RE.match(line)
+            # A long description wraps around the date/amount line:
+            #   "USD IBKR Managed Securities (SYEP) Interest for Nov-"
+            #   "<account> 2025-12-03 24.51"
+            #   "2025"
+            # Accept it only in exactly that shape, so a stray dated line is
+            # never given a guessed description.
+            prev = lines[idx - 1] if idx > 0 else ""
+            nxt = lines[idx + 1] if idx + 1 < len(lines) else ""
+            if not (lone and prev.endswith("-") and re.fullmatch(r"\d{4}", nxt)):
+                continue
+            m = lone
+            description = _flatten(prev + nxt)
+            row_text = f"{prev} | {line} | {nxt}"
         out.append(
             InterestItem(
                 value_date=datetime.strptime(m.group("date"), "%Y-%m-%d").date(),
-                description=m.group("desc").strip(),
+                description=description,
                 amount=float(m.group("amount").replace(",", "")),
                 currency=currency,
-                source=SourceRef(statement_id=statement_id, page=page, table_name="Interest", row_text=line.strip()),
+                source=SourceRef(statement_id=statement_id, page=page, table_name="Interest", row_text=row_text),
             )
         )
     return out
@@ -315,8 +333,12 @@ def parse_realized_pnl_text(
     2nd-5th numbers) plus the realized Total (6th number).
     """
     out: list[Trade] = []
+    section: str | None = None
     for line in text.splitlines():
         tokens = line.strip().split()
+        if len(tokens) == 1 and tokens[0] in _ASSET_SECTIONS:
+            section = tokens[0]
+            continue
         if len(tokens) != 13:
             continue
         symbol = tokens[0]
@@ -348,6 +370,7 @@ def parse_realized_pnl_text(
                     holding_term=HoldingTerm.SHORT,
                     currency=currency,
                     source=source,
+                    asset_class=section,
                 )
             )
         if lt_realized != 0:
@@ -361,6 +384,7 @@ def parse_realized_pnl_text(
                     holding_term=HoldingTerm.LONG,
                     currency=currency,
                     source=source,
+                    asset_class=section,
                 )
             )
     return out
